@@ -1,0 +1,3 @@
+[submodule "src/deps/zig-clap"]
+	path = src/deps/zig-clap
+	url = git@github.com:Hejsil/zig-clap.git
