@@ -1,4 +1,5 @@
 // $ zig build && zig run src/test-parser.zig --pkg-begin decoding src/decoding.zig --pkg-end -- examples examples/pkg_enum.proto
+// $ zig build parsing-test -- examples examples/only_enum.proto
 
 const std = @import("std");
 const parser = @import("parser.zig");

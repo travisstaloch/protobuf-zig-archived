@@ -20,6 +20,18 @@ pub fn build(b: *std.build.Builder) void {
     protoc_zig.install();
     protoc_zig.addPackage(decoding_pkg);
 
+    const parsing_test = b.addExecutable("parsing-test", "src/test-parser.zig");
+    parsing_test.setTarget(target);
+    parsing_test.setBuildMode(mode);
+    parsing_test.install();
+    parsing_test.addPackage(decoding_pkg);
+
+    const parsing_test_step = b.step("parsing-test", "Run a parsing test");
+    const run_cmd = parsing_test.run();
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_cmd.addArgs(args);
+    parsing_test_step.dependOn(&run_cmd.step);
+
     // const exe_tests = b.addTest("src/protoc-gen.zig");
     // exe_tests.setTarget(target);
     // exe_tests.setBuildMode(mode);
