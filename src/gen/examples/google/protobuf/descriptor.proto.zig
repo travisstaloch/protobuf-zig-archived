@@ -323,7 +323,7 @@ reader.context.bytes_left = bytes_left - len;
 self.setPresent(.source_code_info);
 },
 10 => {
-if(key.wire_type != .varint and key.wire_type != .length_delimited) return error.InvalidKeyWireType;
+if(key.wire_type != .length_delimited) return error.InvalidKeyWireType;
 {
 const len = try decoding.readVarint128(usize, reader, .int);
 var countreader = std.io.countingReader(reader);
@@ -335,7 +335,7 @@ while (countreader.bytes_read < len) {
 self.setPresent(.public_dependency);
 },
 11 => {
-if(key.wire_type != .varint and key.wire_type != .length_delimited) return error.InvalidKeyWireType;
+if(key.wire_type != .length_delimited) return error.InvalidKeyWireType;
 {
 const len = try decoding.readVarint128(usize, reader, .int);
 var countreader = std.io.countingReader(reader);
@@ -3814,7 +3814,7 @@ while (true) {
   if(key.wire_type == .start_group or key.wire_type == .end_group) return error.UnsupportedGroupStartOrEnd;
         switch (key.field_num) {
 1 => {
-if(key.wire_type != .varint and key.wire_type != .length_delimited) return error.InvalidKeyWireType;
+if(key.wire_type != .length_delimited) return error.InvalidKeyWireType;
 {
 const len = try decoding.readVarint128(usize, reader, .int);
 var countreader = std.io.countingReader(reader);
@@ -3826,7 +3826,7 @@ while (countreader.bytes_read < len) {
 self.setPresent(.path);
 },
 2 => {
-if(key.wire_type != .varint and key.wire_type != .length_delimited) return error.InvalidKeyWireType;
+if(key.wire_type != .length_delimited) return error.InvalidKeyWireType;
 {
 const len = try decoding.readVarint128(usize, reader, .int);
 var countreader = std.io.countingReader(reader);
@@ -4087,7 +4087,7 @@ while (true) {
   if(key.wire_type == .start_group or key.wire_type == .end_group) return error.UnsupportedGroupStartOrEnd;
         switch (key.field_num) {
 1 => {
-if(key.wire_type != .varint and key.wire_type != .length_delimited) return error.InvalidKeyWireType;
+if(key.wire_type != .length_delimited) return error.InvalidKeyWireType;
 {
 const len = try decoding.readVarint128(usize, reader, .int);
 var countreader = std.io.countingReader(reader);
