@@ -41,7 +41,7 @@ pub fn writeErr(err_msg: types.ErrorMsg, writer: anytype) !void {
     try writer.writeAll(err_msg.msg);
 }
 
-pub fn parseToPlugin(
+pub fn parseToCodeGenReq(
     arena: Allocator,
     source: [*:0]const u8,
     protopath: [*:0]const u8,

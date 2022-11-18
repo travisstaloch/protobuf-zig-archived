@@ -338,19 +338,31 @@ pub fn Parser(comptime ErrWriter: type) type {
             _ = std.ascii.upperString(rest, typename);
             return std.meta.stringToEnum(FieldDescriptorProto.Type, parser.tmp_buf.items);
         }
+
+        inline fn findTypenameInner(typename: []const u8, it: anytype, protofile: FileDescriptorProto) bool {
+            if (std.mem.eql(u8, it.name, typename)) return true;
+            if (std.mem.startsWith(u8, typename, protofile.package)) {
+                const rest = typename[protofile.package.len..];
+                if (rest.len > 0 and rest[0] == '.') {
+                    if (std.mem.eql(u8, rest[1..], it.name)) return true;
+                }
+            }
+            return false;
+        }
+
         fn findTypename(parser: *Self, typename: []const u8) ?FieldDescriptorProto.Type {
             for (parser.req.proto_file.items) |protofile| {
-                for (protofile.enum_type.items) |it| {
-                    std.debug.print("enum it.name {s}\n", .{it.name});
-                    if (std.mem.eql(u8, it.name, typename)) return .TYPE_ENUM;
-                }
-                for (protofile.message_type.items) |it| {
-                    std.debug.print("message it.name {s}\n", .{it.name});
-                    if (std.mem.eql(u8, it.name, typename)) return .TYPE_MESSAGE;
-                }
+                for (protofile.enum_type.items) |it|
+                    if (findTypenameInner(typename, it, protofile))
+                        return .TYPE_ENUM;
+
+                for (protofile.message_type.items) |it|
+                    if (findTypenameInner(typename, it, protofile))
+                        return .TYPE_MESSAGE;
             }
             return null;
         }
+
         fn parseField(parser: *Self, field: *FieldDescriptorProto, pos: TokenIndex, token: Token, file: *File) Error!void {
             // field.tokens[0] = pos;
             const typename = tokenIdContent(pos, file);
@@ -420,6 +432,7 @@ pub fn Parser(comptime ErrWriter: type) type {
         //         if (consumeToken(.comma, file) == null) break;
         //     }
         // }
+
         fn consumeToken(id: Token.Id, file: *File) ?TokenIndex {
             const pos = file.token_it.pos;
             const token = file.token_it.peek() orelse return null;
@@ -430,6 +443,7 @@ pub fn Parser(comptime ErrWriter: type) type {
             }
             return null;
         }
+
         fn consumeTokenContent(id: Token.Id, content: []const u8, file: *File) ?TokenIndex {
             const pos = file.token_it.pos;
             const token = file.token_it.peek() orelse return null;
@@ -442,6 +456,7 @@ pub fn Parser(comptime ErrWriter: type) type {
             }
             return null;
         }
+
         fn expectToken(parser: *Self, id: Token.Id, file: *File) Error!TokenIndex {
             const pos = file.token_it.pos;
             _ = file.token_it.peek() orelse return parser.fail("unexpected end of file", .{}, pos, file);

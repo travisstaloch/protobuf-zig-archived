@@ -95,7 +95,7 @@ pub fn main() !void {
         // if (decoderes == .err) std.os.exit(1);
         // _ = try stdout.write(out.items);
     } else {
-        const req = try protozig.parseToPlugin(
+        const req = try protozig.parseToCodeGenReq(
             allr,
             raw_contents,
             @ptrCast([*:0]const u8, real_protopath.ptr),
@@ -103,16 +103,7 @@ pub fn main() !void {
             stdout,
             stderr,
         );
-        // std.debug.print("req {}\n", .{req.file_to_generate});
-        // const req = switch (genres) {
-        //     .err => blk: {
-        //         std.debug.print(".err received from parseToPlugin()\n", .{});
-        //         // std.os.exit(1);
-        //     },
-        //     .ok => genres.ok,
-        // };
+
         try req.serialize(stdout);
     }
-
-    // _ = try stderr.write("aaaa");
 }

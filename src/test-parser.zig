@@ -74,13 +74,14 @@ pub fn main() !void {
         break :blk req;
     };
 
-    var err = std.ArrayList(u8).init(allr);
     const stdout = std.io.getStdOut().writer();
     try gen_json.writeJson(protoc_req, stdout);
     _ = try stdout.write("\n\n");
     try gen_json.writeJson(zig_protoc_req, stdout);
     _ = try stdout.write("\n\n");
+
     var buf: [256]u8 = undefined;
+    var err = std.ArrayList(u8).init(allr);
     try compare(protoc_req, zig_protoc_req, err.writer(), 0, "", &buf);
     if (err.items.len > 0) {
         std.debug.print("ERROR:\n{s}\n", .{err.items});
