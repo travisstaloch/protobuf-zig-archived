@@ -1,33 +1,46 @@
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const assert = std.debug.assert;
 const tokenizer = @import("tokenizer.zig");
+const types = @import("types.zig");
+const protozig = @import("lib.zig");
+const util = @import("util.zig");
 const plugin = types.plugin;
 const descriptor = types.descriptor;
 const CodeGeneratorRequest = plugin.CodeGeneratorRequest;
-const types = @import("types.zig");
-const protozig = @import("lib.zig");
+const DescriptorProto = descriptor.DescriptorProto;
+const EnumValueDescriptorProto = descriptor.EnumValueDescriptorProto;
+const FieldDescriptorProto = descriptor.FieldDescriptorProto;
+const SourceCodeInfo = descriptor.SourceCodeInfo;
+const FileDescriptorProto = descriptor.FileDescriptorProto;
 const Token = types.Token;
 const TokenIndex = types.TokenIndex;
 const TokenIterator = types.TokenIterator;
 const Error = types.Error;
 const File = types.File;
 const Scope = types.Scope;
+const FileMap = types.FileMap;
+const todo = util.todo;
 
-pub fn init(allocator: Allocator, path: [*:0]const u8, source: [*:0]const u8, errwriter: anytype) Parser(@TypeOf(errwriter)) {
-    return Parser(@TypeOf(errwriter)).init(allocator, path, source, errwriter);
+pub fn init(allocator: Allocator, path: [*:0]const u8, source: [*:0]const u8, include_paths: []const [:0]const u8, errwriter: anytype) Parser(@TypeOf(errwriter)) {
+    return Parser(@TypeOf(errwriter)).init(allocator, path, source, include_paths, errwriter);
 }
 
 pub fn Parser(comptime ErrWriter: type) type {
     return struct {
         arena: Allocator,
         // source: [*:0]const u8,
+        include_paths: []const [:0]const u8 = &.{},
         req: CodeGeneratorRequest = .{},
         root_file: File,
         errwriter: ErrWriter,
+        deps_map: FileMap = .{},
+        tmp_buf: std.ArrayListUnmanaged(u8) = .{},
+
         const Self = @This();
 
-        pub fn init(arena: Allocator, path: [*:0]const u8, source: [*:0]const u8, errwriter: ErrWriter) Self {
+        pub fn init(arena: Allocator, path: [*:0]const u8, source: [*:0]const u8, include_paths: []const [:0]const u8, errwriter: ErrWriter) Self {
             return .{
                 .arena = arena,
                 .root_file = .{
@@ -36,6 +49,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                     .token_it = undefined,
                     .descriptor = undefined,
                 },
+                .include_paths = include_paths,
                 .errwriter = errwriter,
             };
         }
@@ -65,11 +79,15 @@ pub fn Parser(comptime ErrWriter: type) type {
 
         pub fn parse(p: *Self) !CodeGeneratorRequest {
             try tokenize(p.arena, &p.root_file);
-            try p.parseFile(&p.root_file);
+            try p.parseFile(&p.root_file, .root);
+            // FIXME if necessary find a real solution to ordering the proto_files.
+            // maybe relating to declaration order.
+            std.mem.reverse(FileDescriptorProto, p.req.proto_file.items);
+            try p.deps_map.put(p.arena, std.mem.span(p.root_file.path), &p.root_file);
             return p.req;
         }
 
-        pub fn parseFile(parser: *Self, file: *File) !void {
+        pub fn parseFile(parser: *Self, file: *File, ty: File.ImportType) !void {
             parser.req.setPresent(.proto_file);
             file.descriptor = try parser.req.proto_file.addOne(parser.arena);
             file.descriptor.* = .{};
@@ -101,16 +119,114 @@ pub fn Parser(comptime ErrWriter: type) type {
                     .keyword_enum => {
                         try parser.parseEnum(pos, &file.scope, file);
                     },
+                    .keyword_import => {
+                        const filename = try parser.expectToken(.string_literal, file);
+                        _ = try parser.expectToken(.semicolon, file);
+                        try parser.resolveImport(filename, file);
+                    },
+                    .keyword_message => {
+                        try parser.parseMessage(pos, &file.scope, file, null);
+                    },
                     else => return parser.fail("TODO unhandled token '{s}' ", .{tokenContent(token, file)}, pos, file),
                 }
             }
-            // parse each imported file
-            for (file.descriptor.dependency.items) |dep| {
-                std.debug.print("dep {s}\n", .{dep});
+            if (ty != .import) {
+                parser.req.setPresent(.file_to_generate);
+                try parser.req.file_to_generate.append(parser.arena, file_base);
             }
-            if (file.descriptor.dependency.items.len > 0) return error.Todo;
-            parser.req.setPresent(.file_to_generate);
-            try parser.req.file_to_generate.append(parser.arena, file_base);
+            // parse imported files
+            for (file.descriptor.dependency.items) |dep_name| {
+                const depfile = parser.deps_map.get(dep_name).?;
+                if (depfile.token_it.tokens.len == 0) {
+                    assert(depfile.token_it.pos == 0);
+                    try tokenize(parser.arena, depfile);
+                    try parser.parseFile(depfile, .import);
+                }
+            }
+
+            // fixup field types which couldn't be resolved
+            for (file.descriptor.message_type.items) |*it| {
+                for (it.field.items) |*f| {
+                    if (f.type == .TYPE_ERROR) {
+                        if (!f.has(.type_name))
+                            return parser.fail("missing field.type_name for field {s}", .{f.name}, 0, file);
+                        const fty = parser.findTypename(f.type_name) orelse
+                            return parser.fail("invalid typename {s}", .{f.type_name}, 0, file);
+                        f.set(.type, fty);
+                    }
+                }
+            }
+        }
+
+        /// searches include paths for an imported file path and
+        /// adds it to file.descriptor.dependency and parser.deps_map if not already present
+        fn resolveImport(parser: *Self, filename_tokid: TokenIndex, file: *File) !void {
+            const filename = tokenIdContent(filename_tokid, file);
+            const filename_trimmed = filename[1 .. filename.len - 1];
+            var realpath: []const u8 = &.{};
+            var buf0: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            const f = std.fs.cwd().openFile(filename_trimmed, .{}) catch |err| switch (err) {
+                // check include paths if not found
+                error.FileNotFound => blk: {
+                    for (parser.include_paths) |path| {
+                        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+                        var fba = std.heap.FixedBufferAllocator.init(&buf);
+                        const path_full = try std.fs.path.join(fba.allocator(), &.{ path, filename_trimmed });
+
+                        if (std.fs.cwd().openFile(path_full, .{})) |f| {
+                            realpath = try std.fs.cwd().realpath(path_full, &buf0);
+                            break :blk f;
+                        } else |_| continue;
+                    } else return parser.fail("file '{s}' not found.  checked {} include path.\n", .{ filename_trimmed, parser.include_paths.len }, filename_tokid, file);
+                },
+                else => return err,
+            };
+            defer f.close();
+
+            if (realpath.len == 0)
+                return parser.fail("import file not found {s}", .{filename}, filename_tokid, file);
+
+            // TODO change from realpath to package.name
+            const realpath_dupe = try parser.arena.dupe(u8, realpath);
+            var gop = try parser.deps_map.getOrPut(parser.arena, realpath_dupe);
+
+            if (!gop.found_existing) {
+                const file_base = std.fs.path.basename(realpath_dupe);
+                const new_file = try parser.arena.create(File);
+                new_file.* = File.init(
+                    try f.readToEndAllocOptions(parser.arena, std.math.maxInt(u32), null, 1, 0),
+                    try parser.arena.dupeZ(u8, realpath),
+                    undefined, // file.descriptor is undefined. will be set later in parseFile
+                );
+                file.descriptor.setPresent(.dependency);
+                try file.descriptor.dependency.append(parser.arena, file_base);
+                try parser.deps_map.put(parser.arena, file_base, new_file);
+                gop.value_ptr.* = new_file;
+            } else {
+                // assert(gop.value_ptr.name == .import);
+                todo("nothing? can likely remove this just leaving it in as a reminder\n", .{});
+            }
+        }
+
+        fn addToLocation(allocator: Allocator, location: *SourceCodeInfo.Location, source_code_info: *SourceCodeInfo, start_tok: Token) !void {
+            // TODO
+            // location.span
+            // Always has exactly three or four elements: start line, start column,
+            // end line (optional, otherwise assumed same as start line), end column.
+            // These are packed into a single field for efficiency.  Note that line
+            // and column numbers are zero-based -- typically you will want to add
+            // 1 to each before displaying to a user.
+            if (false) {
+                try location.span.appendSlice(allocator, &.{
+                    start_tok.line_col_start.line,
+                    start_tok.line_col_start.col,
+                    start_tok.line_col_end.line,
+                    start_tok.line_col_end.col,
+                });
+
+                location.setPresent(.span);
+                source_code_info.setPresent(.location);
+            }
         }
 
         fn parseEnum(parser: *Self, start: TokenIndex, scope: *Scope, file: *File) Error!void {
@@ -124,21 +240,9 @@ pub fn Parser(comptime ErrWriter: type) type {
 
             const name = try parser.expectToken(.identifier, file);
             enum_node.set(.name, tokenIdContent(name, file));
-            var location: descriptor.SourceCodeInfo.Location = .{};
-            location.setPresent(.span);
-            const start_tok = file.token_it.tokens[start];
-            try location.span.appendSlice(parser.arena, &.{
-                start_tok.line_col_start.line,
-                start_tok.line_col_start.col,
-                start_tok.line_col_end.line,
-                start_tok.line_col_end.col,
-            });
-            // location.span
-            // Always has exactly three or four elements: start line, start column,
-            // end line (optional, otherwise assumed same as start line), end column.
-            // These are packed into a single field for efficiency.  Note that line
-            // and column numbers are zero-based -- typically you will want to add
-            // 1 to each before displaying to a user.
+            var location: SourceCodeInfo.Location = .{};
+            try addToLocation(parser.arena, &location, source_code_info, file.token_it.tokens[start]);
+
             _ = try parser.expectToken(.l_brace, file);
             while (true) {
                 const pos = file.token_it.pos;
@@ -159,7 +263,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         const field_name = tokenIdContent(name_pos, file);
                         const number = try std.fmt.parseInt(i32, tokenIdContent(field_value, file), 10);
                         enum_node.setPresent(.value);
-                        var value: descriptor.EnumValueDescriptorProto = .{};
+                        var value: EnumValueDescriptorProto = .{};
                         value.set(.name, field_name);
                         value.set(.number, number);
                         try enum_node.value.append(parser.arena, value);
@@ -169,8 +273,138 @@ pub fn Parser(comptime ErrWriter: type) type {
                 }
             }
             file.descriptor.setPresent(.source_code_info);
-            source_code_info.setPresent(.location);
+
             try source_code_info.location.append(parser.arena, location);
+        }
+
+        fn parseMessage(parser: *Self, start: TokenIndex, scope: *Scope, file: *File, parent: ?*const DescriptorProto) Error!void {
+            _ = scope;
+            _ = parent;
+            var message_node = try file.descriptor.message_type.addOne(parser.arena);
+            message_node.* = .{};
+            file.descriptor.setPresent(.message_type);
+            const source_code_info = try parser.arena.create(descriptor.SourceCodeInfo);
+            file.descriptor.source_code_info = source_code_info;
+            source_code_info.* = .{};
+            _ = scope;
+
+            const name = try parser.expectToken(.identifier, file);
+            message_node.set(.name, tokenIdContent(name, file));
+            var location: descriptor.SourceCodeInfo.Location = .{};
+            try addToLocation(parser.arena, &location, source_code_info, file.token_it.tokens[start]);
+
+            _ = try parser.expectToken(.l_brace, file);
+            while (true) {
+                const pos = file.token_it.pos;
+                const token = file.token_it.next();
+                switch (token.id) {
+                    .identifier, .identifier_dotted, .keyword_repeated, .keyword_optional, .keyword_required, .keyword_map => {
+                        var field: FieldDescriptorProto = .{};
+                        try parser.parseField(&field, pos, token, file);
+                        try message_node.field.append(parser.arena, field);
+                        message_node.setPresent(.field);
+                        // // honor syntax
+                        // //   proto2: field label is required
+                        // //   proto3: fields default to optional, required not allowed
+                        // if (file.syntax == .proto3) {
+                        //     if (field.labels.count() == 0) {
+                        //         field.labels.insert(.optional);
+                        //     } else if (field.labels.contains(.required)) {
+                        //         return parser.fail("required fields are not allowed in proto3", .{}, field.tokens[0], file);
+                        //     }
+                        // } else if (file.syntax == .proto2 and field.labels.count() == 0) {
+                        //     return parser.fail("missing field label. proto2 syntax requires all fields have a label preceding the name - either 'optional', 'required' or 'repeated'", .{}, field.tokens[0], file);
+                        // }
+
+                        // try message_node.fields.append(parser.arena, .{ .f = field });
+                    },
+                    .r_brace => {
+                        // message_node.loc.end = pos;
+                        break;
+                    },
+
+                    else => return parser.fail("unexpected token: {}", .{token.id}, pos, file),
+                }
+            }
+        }
+
+        fn parseProtoFieldType(parser: *Self, typename: []const u8) !?FieldDescriptorProto.Type {
+            const prefix = "TYPE_";
+            const len = prefix.len + typename.len;
+            try parser.tmp_buf.ensureTotalCapacity(parser.arena, len);
+            parser.tmp_buf.items.len = len;
+            std.mem.copy(u8, parser.tmp_buf.items, prefix);
+            const rest = parser.tmp_buf.items[prefix.len..];
+            _ = std.ascii.upperString(rest, typename);
+            return std.meta.stringToEnum(FieldDescriptorProto.Type, parser.tmp_buf.items);
+        }
+        fn findTypename(parser: *Self, typename: []const u8) ?FieldDescriptorProto.Type {
+            for (parser.req.proto_file.items) |protofile| {
+                for (protofile.enum_type.items) |it| {
+                    std.debug.print("enum it.name {s}\n", .{it.name});
+                    if (std.mem.eql(u8, it.name, typename)) return .TYPE_ENUM;
+                }
+                for (protofile.message_type.items) |it| {
+                    std.debug.print("message it.name {s}\n", .{it.name});
+                    if (std.mem.eql(u8, it.name, typename)) return .TYPE_MESSAGE;
+                }
+            }
+            return null;
+        }
+        fn parseField(parser: *Self, field: *FieldDescriptorProto, pos: TokenIndex, token: Token, file: *File) Error!void {
+            // field.tokens[0] = pos;
+            const typename = tokenIdContent(pos, file);
+            if (try parser.parseProtoFieldType(typename)) |ty|
+                field.set(.type, ty)
+            else
+                field.set(.type_name, typename);
+
+            if (file.syntax == .proto3) field.set(.label, .LABEL_OPTIONAL);
+            blk: {
+                switch (token.id) {
+                    .keyword_repeated => field.set(.label, .LABEL_REPEATED),
+                    .keyword_optional => field.set(.label, .LABEL_OPTIONAL),
+                    .keyword_required => field.set(.label, .LABEL_REQUIRED),
+                    else => break :blk,
+                }
+                // field.tokens[0] = file.token_it.pos;
+                _ = file.token_it.next();
+            }
+            if (token.id == .keyword_map) {
+                _ = try parser.expectToken(.lt, file);
+                // TODO save ident
+                _ = try parser.expectTokenIn(&.{ .identifier, .identifier_dotted }, file);
+                _ = try parser.expectToken(.comma, file);
+                // TODO save ident
+                _ = try parser.expectTokenIn(&.{ .identifier, .identifier_dotted }, file);
+                _ = try parser.expectToken(.gt, file);
+                field.set(.label, .LABEL_REPEATED);
+            }
+
+            // TODO save location
+            // TODO handle other tokens
+            // const nameid = try parser.expectTokenIn(&.{ .identifier, .keyword_package, .keyword_syntax }, file);
+            const nameid = try parser.expectToken(.identifier, file);
+            const name = tokenIdContent(nameid, file);
+            field.set(.name, name);
+            field.set(.json_name, name);
+
+            _ = try parser.expectToken(.equal, file);
+            // TODO save location
+            const numid = try parser.expectToken(.int_literal, file);
+            field.set(.number, try std.fmt.parseInt(i32, tokenIdContent(numid, file), 10));
+            if (consumeToken(.l_sbrace, file)) |_| { // field options: ie [default=true]
+                // save field options like default/deprecated/packed/json_name
+                // TODO: [packed = true] can only be specified for repeated primitive fields
+                // const option = try field.options.addOne(parser.arena);
+                // TODO save option data/location
+                _ = try parser.expectToken(.identifier, file);
+                _ = try parser.expectToken(.equal, file);
+                // TODO save option data/location
+                _ = try parser.expectTokenIn(&.{.identifier}, file);
+                _ = try parser.expectToken(.r_sbrace, file);
+            }
+            _ = try parser.expectToken(.semicolon, file);
         }
 
         // fn parseRanges(parser: *Self, range_list: *RangeList, file: *File) Error!void {

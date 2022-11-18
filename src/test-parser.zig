@@ -5,6 +5,7 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const decoding = @import("decoding.zig");
 const types = @import("types.zig");
+const gen_json = @import("gen-json.zig");
 const plugin = types.plugin;
 const CodeGeneratorRequest = plugin.CodeGeneratorRequest;
 
@@ -54,7 +55,7 @@ pub fn main() !void {
             .allocator = allr,
             .env_map = &env_map,
         });
-        // std.debug.print("protoc-zig stderr {s}\n", .{res.stderr});
+        std.debug.print("protoc-zig stderr {s}\n", .{res.stderr});
         std.debug.print("protoc-zig stdout {s}\n", .{std.fmt.fmtSliceHexLower(res.stdout)});
         break :blk res.stdout;
     };
@@ -74,9 +75,15 @@ pub fn main() !void {
     };
 
     var err = std.ArrayList(u8).init(allr);
-    try compare(protoc_req, zig_protoc_req, err.writer(), 0, "");
+    const stdout = std.io.getStdOut().writer();
+    try gen_json.writeJson(protoc_req, stdout);
+    _ = try stdout.write("\n\n");
+    try gen_json.writeJson(zig_protoc_req, stdout);
+    _ = try stdout.write("\n\n");
+    var buf: [256]u8 = undefined;
+    try compare(protoc_req, zig_protoc_req, err.writer(), 0, "", &buf);
     if (err.items.len > 0) {
-        std.debug.print("ERROR: {s}\n", .{err.items});
+        std.debug.print("ERROR:\n{s}\n", .{err.items});
         return error.DifferingCodeGenRequests;
     }
 }
@@ -110,8 +117,9 @@ fn Fmt(comptime T: type) type {
                     .One => try writer.print("{}", .{fmt(self.t.*)}),
                     else => try writer.print("TODO Fmt display {s}.size.{s}", .{ @tagName(info), @tagName(info.Pointer.size) }),
                 },
-                .Int => try writer.print("{}", .{self.t}),
+                .Int, .Bool => try writer.print("{}", .{self.t}),
                 .Optional => if (self.t) |t| try writer.print("{}", .{fmt(t)}),
+                .Enum => try writer.print(".{s}", .{@tagName(self.t)}),
                 else => try writer.print("TODO Fmt display {s}", .{@tagName(info)}),
             }
         }
@@ -127,7 +135,7 @@ fn compareprint(comptime fmtt: []const u8, args: anytype, errwriter: anytype, de
     try errwriter.print(fmtt, args);
 }
 
-fn compare(expected: anytype, actual: anytype, errwriter: anytype, depth: usize, field_name: []const u8) CmpErr!void {
+fn compare(expected: anytype, actual: anytype, errwriter: anytype, depth: usize, field_name: []const u8, buf: []u8) CmpErr!void {
     // TODO compare and report differences
     const E = @TypeOf(expected);
     const einfo = @typeInfo(E);
@@ -144,15 +152,15 @@ fn compare(expected: anytype, actual: anytype, errwriter: anytype, depth: usize,
                 if (i < expected.items.len and i < actual.items.len) {
                     const actit = actual.items[i];
                     const exit = expected.items[i];
-                    compare(exit, actit, errwriter, depth + 1, field_name) catch {
+                    compare(exit, actit, errwriter, depth + 1, field_name, buf) catch {
                         try compareprint("{s}: items[{}] differ\n", .{ field_name, i }, errwriter, depth);
                     };
                 } else if (i < expected.items.len) {
                     const exit = expected.items[i];
-                    try compareprint("{s}: items[{}] differ expected {} actual null\n", .{ field_name, i, fmt(exit) }, errwriter, depth);
+                    try compareprint("{s}: items[{}] differ expected {} actual <missing>\n", .{ field_name, i, fmt(exit) }, errwriter, depth);
                 } else if (i < actual.items.len) {
                     const actit = actual.items[i];
-                    try compareprint("{s}: items[{}] differ expected null actual {}\n", .{ field_name, i, fmt(actit) }, errwriter, depth);
+                    try compareprint("{s}: items[{}] differ expected <missing> actual {}\n", .{ field_name, i, fmt(actit) }, errwriter, depth);
                 }
             }
         } else {
@@ -160,23 +168,24 @@ fn compare(expected: anytype, actual: anytype, errwriter: anytype, depth: usize,
                 if (comptime std.mem.startsWith(u8, f.name, "__")) continue;
                 const ex = @field(expected, f.name);
                 const act = @field(actual, f.name);
-                var buf: [256]u8 = undefined;
-                const fname = if (field_name.len == 0) f.name else try std.fmt.bufPrint(&buf, "{s}.{s}", .{ field_name, f.name });
-                try compare(ex, act, errwriter, depth + 1, fname);
+                const fname = if (field_name.len == 0) f.name else try std.fmt.bufPrint(buf, "{s}.{s}", .{ field_name, f.name });
+                try compare(ex, act, errwriter, depth + 1, fname, buf);
             }
         },
         .Optional => if (expected != null and actual != null)
-            return compare(expected.?, actual.?, errwriter, depth, field_name)
+            return compare(expected.?, actual.?, errwriter, depth, field_name, buf)
         else if (expected == null and actual == null) {} else {
             try compareprint("{s}: optionals differ expected {} actual {}\n", .{ field_name, fmt(expected), fmt(actual) }, errwriter, depth);
         },
-        .Int => if (expected != actual)
-            try compareprint("{s}: ints differ expected {} actual {}\n", .{ field_name, expected, actual }, errwriter, depth),
+        .Int, .Bool => if (expected != actual)
+            try compareprint("{s}: {s}s differ expected {} actual {}\n", .{ field_name, @tagName(einfo), expected, actual }, errwriter, depth),
+        .Enum => if (expected != actual)
+            try compareprint("{s}: {s}s differ expected .{s} actual .{s}\n", .{ field_name, @tagName(einfo), @tagName(expected), @tagName(actual) }, errwriter, depth),
         .Pointer => if (comptime std.meta.trait.isZigString(E)) {
             if (!std.mem.eql(u8, expected, actual))
                 try compareprint("{s}: strings differ expected '{s}' actual '{s}'\n", .{ field_name, expected, actual }, errwriter, depth);
         } else switch (einfo.Pointer.size) {
-            .One => try compare(expected.*, actual.*, errwriter, depth, field_name),
+            .One => try compare(expected.*, actual.*, errwriter, depth, field_name, buf),
             else => try compareprint("{s}: TODO {s} {s}\n", .{ field_name, @tagName(einfo), @typeName(E) }, errwriter, depth),
         },
         else => {

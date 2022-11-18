@@ -11,9 +11,6 @@ const CodeGeneratorRequest = plugin.CodeGeneratorRequest;
 // const Result = types.Result(CodeGeneratorRequest);
 
 pub fn writeErr(err_msg: types.ErrorMsg, writer: anytype) !void {
-
-    // TODO restore the immediate parent scope for error handling
-
     // find the line and column of error
     var line: usize = 1;
     var col: usize = 1;
@@ -61,28 +58,7 @@ pub fn parseToPlugin(
     };
     defer proto_file.close();
 
-    // var file = File.init(source, .{ .path = protopath });
-    // _ = file;
-    // _ = source;
-    // _ = arena;
-    _ = include_paths;
     _ = writer;
-    // _ = errwriter;
-    // std.debug.print("TODO tokenize, parse\n", .{});
-    // var t: tokenizer.Tokenizer = .{ .source = source, .index = 0 };
-    // _ = t;
-    var pparser = parser.init(arena, protopath, source, errwriter);
+    var pparser = parser.init(arena, protopath, source, include_paths, errwriter);
     return pparser.parse();
-
-    // return error.Todo;
-    // try parser.tokenize(arena, source, &file);
-    // var pparser = parser.init(arena, &file, include_paths, errwriter);
-    // try pparser.deps_map.put(arena, std.mem.span(protopath), file);
-    // switch (try pparser.parse()) {
-    //     .ok => {},
-    //     .err => return .err,
-    // }
-
-    // var ggenerator = generator.generator(arena, pparser.root_file, errwriter);
-    // return try ggenerator.generate(writer);
 }

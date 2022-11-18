@@ -163,6 +163,11 @@ pub const File = struct {
     syntax: Syntax = .proto2,
 
     pub const Syntax = enum { proto2, proto3 };
+    pub const ImportType = enum { import, root };
+
+    pub fn init(source: ?[*:0]const u8, path: [*:0]const u8, descr: *FileDescriptorProto) File {
+        return .{ .source = source, .path = path, .descriptor = descr, .token_it = .{ .tokens = &.{} } };
+    }
 };
 pub const Scope = struct {
     // enums: NodeList = .{},
@@ -184,7 +189,7 @@ pub const Site = struct {
     }
 };
 
-pub const FileMap = std.StringHashMapUnmanaged(File);
+pub const FileMap = std.StringHashMapUnmanaged(*File);
 
 pub const Node = union(enum) {
     @"enum": *EnumNode,
