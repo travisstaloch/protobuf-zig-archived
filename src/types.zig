@@ -121,39 +121,6 @@ pub const Error = error{
     std.fmt.BufPrintError ||
     std.os.RealPathError;
 
-// pub const File = struct {
-//     source: ?[*:0]const u8,
-//     name: Name,
-//     package: ?TokenIndex = null,
-//     options: std.ArrayListUnmanaged([2]TokenIndex) = .{},
-//     scope: Scope = .{},
-//     token_it: TokenIterator,
-//     syntax: Syntax = .proto2,
-//     deps: std.AutoHashMapUnmanaged(*File, void) = .{},
-
-//     pub const Name = union(enum) {
-//         path: [*:0]const u8, // file path (usually a cli arg)
-//         import: Import, // an imported name
-
-//         pub fn pathStr(name: Name) []const u8 {
-//             return switch (name) {
-//                 .path => std.mem.span(name.path),
-//                 .import => name.import.realpath,
-//             };
-//         }
-//     };
-//     pub const Import = struct {
-//         /// resolved full path to import
-//         realpath: []const u8 = &.{},
-//         /// site where import occurs
-//         site: Site,
-//     };
-//     pub const Syntax = enum { proto2, proto3 };
-
-//     pub fn init(source: ?[*:0]const u8, name: Name) File {
-//         return .{ .source = source, .name = name, .token_it = .{ .tokens = &.{} } };
-//     }
-// };
 pub const File = struct {
     source: ?[*:0]const u8,
     path: [*:0]const u8,
@@ -170,9 +137,11 @@ pub const File = struct {
     }
 };
 pub const Scope = struct {
-    // enums: NodeList = .{},
-    // messages: NodeList = .{},
-    parent: ?*const Scope = null,
+    parent: ?*Scope = null,
+};
+pub const ScopedDescriptor = struct {
+    scope: ?*Scope = null,
+    descriptor: *descriptor.DescriptorProto,
 };
 /// represents a token within a file
 pub const Site = struct {
@@ -221,12 +190,6 @@ pub const EnumNode = struct {
 
     pub const Field = [2]TokenIndex; // name, value
 };
-
-// pub const Scope = struct {
-//     enums: NodeList = .{},
-//     messages: NodeList = .{},
-//     parent: ?*const Scope = null,
-// };
 
 pub const MessageNode = struct {
     loc: Loc,

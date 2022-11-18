@@ -21,6 +21,7 @@ const Error = types.Error;
 const File = types.File;
 const Scope = types.Scope;
 const FileMap = types.FileMap;
+const ScopedDescriptor = types.ScopedDescriptor;
 const todo = util.todo;
 
 pub fn init(allocator: Allocator, path: [*:0]const u8, source: [*:0]const u8, include_paths: []const [:0]const u8, errwriter: anytype) Parser(@TypeOf(errwriter)) {
@@ -78,12 +79,12 @@ pub fn Parser(comptime ErrWriter: type) type {
         }
 
         pub fn parse(p: *Self) !CodeGeneratorRequest {
+            try p.deps_map.put(p.arena, std.mem.span(p.root_file.path), &p.root_file);
             try tokenize(p.arena, &p.root_file);
             try p.parseFile(&p.root_file, .root);
             // FIXME if necessary find a real solution to ordering the proto_files.
             // maybe relating to declaration order.
             std.mem.reverse(FileDescriptorProto, p.req.proto_file.items);
-            try p.deps_map.put(p.arena, std.mem.span(p.root_file.path), &p.root_file);
             return p.req;
         }
 
@@ -229,6 +230,17 @@ pub fn Parser(comptime ErrWriter: type) type {
             }
         }
 
+        fn parseBool(parser: *Self, start: TokenIndex, file: *File) !bool {
+            const str = tokenIdContent(start, file);
+            const val = if (std.mem.eql(u8, str, "true"))
+                true
+            else if (std.mem.eql(u8, str, "false"))
+                false
+            else
+                return parser.fail("invalid boolean value '{s}'", .{str}, start, file);
+            return val;
+        }
+
         fn parseEnum(parser: *Self, start: TokenIndex, scope: *Scope, file: *File) Error!void {
             var enum_node = try file.descriptor.enum_type.addOne(parser.arena);
             enum_node.* = .{};
@@ -269,6 +281,25 @@ pub fn Parser(comptime ErrWriter: type) type {
                         try enum_node.value.append(parser.arena, value);
                     },
                     .r_brace => break,
+                    .keyword_option => {
+                        const optionid = try parser.expectToken(.identifier, file);
+                        _ = try parser.expectToken(.equal, file);
+                        const optionval_id = try parser.expectTokenIn(&.{ .string_literal, .int_literal, .identifier }, file);
+                        _ = try parser.expectToken(.semicolon, file);
+                        const option = tokenIdContent(optionid, file);
+                        var options = try parser.arena.create(descriptor.EnumOptions);
+                        options.* = .{};
+                        if (std.mem.eql(u8, "allow_alias", option)) {
+                            options.set(.allow_alias, try parser.parseBool(optionval_id, file));
+                        } else if (std.mem.eql(u8, "deprecated", option)) {
+                            options.set(.deprecated, try parser.parseBool(optionval_id, file));
+                        } else {
+                            // try enumoption.uninterpreted_option.append(parser.arena, .{});
+                            return parser.fail("TODO parse uninterpreted_option", .{}, pos, file);
+                        }
+                        enum_node.set(.options, options);
+                    },
+
                     else => return parser.fail("unexpected token: {}", .{token.id}, pos, file),
                 }
             }
@@ -277,16 +308,15 @@ pub fn Parser(comptime ErrWriter: type) type {
             try source_code_info.location.append(parser.arena, location);
         }
 
-        fn parseMessage(parser: *Self, start: TokenIndex, scope: *Scope, file: *File, parent: ?*const DescriptorProto) Error!void {
-            _ = scope;
-            _ = parent;
+        fn parseMessage(parser: *Self, start: TokenIndex, scope: *Scope, file: *File, parent: ?*Scope) Error!void {
             var message_node = try file.descriptor.message_type.addOne(parser.arena);
             message_node.* = .{};
+            var scoped_descr: ScopedDescriptor = .{ .descriptor = message_node, .scope = try parser.arena.create(Scope) };
+            scoped_descr.scope.?.* = .{ .parent = parent };
             file.descriptor.setPresent(.message_type);
             const source_code_info = try parser.arena.create(descriptor.SourceCodeInfo);
             file.descriptor.source_code_info = source_code_info;
             source_code_info.* = .{};
-            _ = scope;
 
             const name = try parser.expectToken(.identifier, file);
             message_node.set(.name, tokenIdContent(name, file));
@@ -322,7 +352,12 @@ pub fn Parser(comptime ErrWriter: type) type {
                         // message_node.loc.end = pos;
                         break;
                     },
-
+                    .keyword_enum => {
+                        try parser.parseEnum(pos, scoped_descr.scope.?, file);
+                    },
+                    .keyword_message => {
+                        try parser.parseMessage(pos, scoped_descr.scope.?, file, scope);
+                    },
                     else => return parser.fail("unexpected token: {}", .{token.id}, pos, file),
                 }
             }
