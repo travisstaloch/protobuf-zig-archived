@@ -19,7 +19,6 @@ const TokenIndex = types.TokenIndex;
 const TokenIterator = types.TokenIterator;
 const Error = types.Error;
 const File = types.File;
-const Scope = types.Scope;
 const FileMap = types.FileMap;
 const ScopedDescriptor = types.ScopedDescriptor;
 const todo = util.todo;
@@ -31,7 +30,6 @@ pub fn init(allocator: Allocator, path: [*:0]const u8, source: [*:0]const u8, in
 pub fn Parser(comptime ErrWriter: type) type {
     return struct {
         arena: Allocator,
-        // source: [*:0]const u8,
         include_paths: []const [:0]const u8 = &.{},
         req: CodeGeneratorRequest = .{},
         root_file: File,
@@ -121,7 +119,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         _ = try parser.expectToken(.semicolon, file);
                     },
                     .keyword_enum => {
-                        try parser.parseEnum(pos, &file.scope, file);
+                        try parser.parseEnum(pos, file);
                     },
                     .keyword_import => {
                         const filename = try parser.expectToken(.string_literal, file);
@@ -129,10 +127,13 @@ pub fn Parser(comptime ErrWriter: type) type {
                         try parser.resolveImport(filename, file);
                     },
                     .keyword_message => {
-                        try parser.parseMessage(pos, &file.scope, file, null);
+                        const source_code_info = try parser.arena.create(descriptor.SourceCodeInfo);
+                        source_code_info.* = .{};
+                        try parser.parseMessage(pos, file, &file.descriptor.message_type, source_code_info);
+                        file.descriptor.setPresent(.message_type);
+                        file.descriptor.set(.source_code_info, source_code_info);
                     },
                     .keyword_option => {
-                        // option[0] = try parser.expectToken(.identifier, file);
                         const nameid = try parser.expectToken(.identifier, file);
                         _ = try parser.expectToken(.equal, file);
                         const contentid = try parser.expectTokenIn(&.{ .string_literal, .int_literal, .identifier }, file);
@@ -178,6 +179,10 @@ pub fn Parser(comptime ErrWriter: type) type {
             }
         }
 
+        /// assumes '[' was previous
+        /// used for parsing options of form '[ctype = CORD]'
+        /// T: descriptor.FileOptions or FieldOptions
+        /// E: descriptor.FieldOptions.FieldOptionsFieldEnum
         fn parseOptions(
             parser: *Self,
             comptime T: type,
@@ -327,9 +332,7 @@ pub fn Parser(comptime ErrWriter: type) type {
             if (realpath.len == 0)
                 return parser.fail("import file not found {s}", .{filename}, filename_tokid, file);
 
-            // TODO change from realpath to package.name
-            const realpath_dupe = try parser.arena.dupe(u8, realpath);
-            var gop = try parser.deps_map.getOrPut(parser.arena, realpath_dupe);
+            var gop = try parser.deps_map.getOrPut(parser.arena, filename_trimmed);
 
             if (!gop.found_existing) {
                 const new_file = try parser.arena.create(File);
@@ -380,8 +383,7 @@ pub fn Parser(comptime ErrWriter: type) type {
             return val;
         }
 
-        fn parseEnum(parser: *Self, start: TokenIndex, scope: *Scope, file: *File) Error!void {
-            _ = scope;
+        fn parseEnum(parser: *Self, start: TokenIndex, file: *File) Error!void {
             var enum_node = try file.descriptor.enum_type.addOne(parser.arena);
             enum_node.* = .{};
             file.descriptor.setPresent(.enum_type);
@@ -446,15 +448,15 @@ pub fn Parser(comptime ErrWriter: type) type {
             try source_code_info.location.append(parser.arena, location);
         }
 
-        fn parseMessage(parser: *Self, start: TokenIndex, scope: *Scope, file: *File, parent: ?*Scope) Error!void {
-            var message_node = try file.descriptor.message_type.addOne(parser.arena);
+        fn parseMessage(
+            parser: *Self,
+            start: TokenIndex,
+            file: *File,
+            parent_list: *std.ArrayListUnmanaged(DescriptorProto),
+            source_code_info: *SourceCodeInfo,
+        ) Error!void {
+            var message_node = try parent_list.addOne(parser.arena);
             message_node.* = .{};
-            var scoped_descr: ScopedDescriptor = .{ .descriptor = message_node, .scope = try parser.arena.create(Scope) };
-            scoped_descr.scope.?.* = .{ .parent = parent };
-            file.descriptor.setPresent(.message_type);
-            const source_code_info = try parser.arena.create(descriptor.SourceCodeInfo);
-            file.descriptor.source_code_info = source_code_info;
-            source_code_info.* = .{};
 
             const name = try parser.expectToken(.identifier, file);
             message_node.set(.name, tokenIdContent(name, file));
@@ -462,6 +464,7 @@ pub fn Parser(comptime ErrWriter: type) type {
             try addToLocation(parser.arena, &location, source_code_info, file.token_it.tokens[start]);
 
             _ = try parser.expectToken(.l_brace, file);
+
             while (true) {
                 const pos = file.token_it.pos;
                 const token = file.token_it.next();
@@ -492,10 +495,11 @@ pub fn Parser(comptime ErrWriter: type) type {
                         break;
                     },
                     .keyword_enum => {
-                        try parser.parseEnum(pos, scoped_descr.scope.?, file);
+                        try parser.parseEnum(pos, file);
                     },
                     .keyword_message => {
-                        try parser.parseMessage(pos, scoped_descr.scope.?, file, scope);
+                        try parser.parseMessage(pos, file, &message_node.nested_type, source_code_info);
+                        message_node.setPresent(.nested_type);
                     },
                     .keyword_oneof => {
                         const oneof_id = message_node.oneof_decl.items.len;

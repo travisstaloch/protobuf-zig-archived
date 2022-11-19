@@ -124,7 +124,6 @@ pub const Error = error{
 pub const File = struct {
     source: ?[*:0]const u8,
     path: [*:0]const u8,
-    scope: Scope = .{},
     token_it: TokenIterator,
     descriptor: *FileDescriptorProto,
     syntax: Syntax = .proto2,
@@ -136,13 +135,7 @@ pub const File = struct {
         return .{ .source = source, .path = path, .descriptor = descr, .token_it = .{ .tokens = &.{} } };
     }
 };
-pub const Scope = struct {
-    parent: ?*Scope = null,
-};
-pub const ScopedDescriptor = struct {
-    scope: ?*Scope = null,
-    descriptor: *descriptor.DescriptorProto,
-};
+
 /// represents a token within a file
 pub const Site = struct {
     tokid: TokenIndex,
@@ -160,19 +153,6 @@ pub const Site = struct {
 
 pub const FileMap = std.StringHashMapUnmanaged(*File);
 
-pub const Node = union(enum) {
-    @"enum": *EnumNode,
-    message: *MessageNode,
-
-    pub fn nameToken(n: Node) TokenIndex {
-        return switch (n) {
-            .@"enum" => n.@"enum".name,
-            .message => n.message.name,
-        };
-    }
-};
-
-pub const NodeList = std.ArrayListUnmanaged(Node);
 pub const LineCol = struct {
     line: i32,
     col: i32,
@@ -191,43 +171,11 @@ pub const EnumNode = struct {
     pub const Field = [2]TokenIndex; // name, value
 };
 
-pub const MessageNode = struct {
-    loc: Loc,
-    name: TokenIndex,
-    fields: std.ArrayListUnmanaged(FieldU) = .{},
-    scope: Scope = .{},
-    extensions: RangeList = .{},
-    reserved: RangeList = .{},
-    parent_node: ?*const MessageNode,
-
-    pub const FieldTag = std.meta.Tag(FieldU);
-    pub const FieldU = union(enum) {
-        f: Field,
-        u: OneOfField,
-    };
-
-    pub const Field = struct {
-        tokens: [3]TokenIndex, // type, name, number
-        labels: std.EnumSet(decoding.Label) = .{},
-        options: std.ArrayListUnmanaged([2]TokenIndex) = .{},
-    };
-
-    pub const OneOfField = struct {
-        name: TokenIndex,
-        fields: std.ArrayListUnmanaged(Field) = .{},
-    };
-};
-
 pub const Range = struct { start: TokenIndex, end: ?TokenIndex };
 pub const RangeList = std.ArrayListUnmanaged(Range);
 
 pub const ErrorMsg = struct {
     msg: []const u8,
     token: Token,
-    file: *File,
-};
-
-pub const NodeAndFile = struct {
-    node: Node,
     file: *File,
 };
