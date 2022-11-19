@@ -85,6 +85,9 @@ pub fn Parser(comptime ErrWriter: type) type {
             // FIXME if necessary find a real solution to ordering the proto_files.
             // maybe relating to declaration order.
             std.mem.reverse(FileDescriptorProto, p.req.proto_file.items);
+            for (p.root_file.descriptor.message_type.items) |*it| {
+                try p.fixupFieldTypes(it, &p.root_file);
+            }
             return p.req;
         }
 
@@ -173,10 +176,6 @@ pub fn Parser(comptime ErrWriter: type) type {
                     try parser.parseFile(depfile, .import);
                 }
             }
-
-            for (file.descriptor.message_type.items) |*it| {
-                try parser.fixupFieldTypes(it, file);
-            }
         }
 
         fn parseOptions(
@@ -238,7 +237,51 @@ pub fn Parser(comptime ErrWriter: type) type {
             return false;
         }
 
-        // fixup field types which couldn't be resolved
+        fn findTypenameInner(parser: *Self, typename: []const u8, it: anytype, protofile: FileDescriptorProto) Allocator.Error!bool {
+            // std.debug.print("findTypenameInner typename {s} it.name {s} parser.tmp_buf {s}\n", .{ typename, it.name, parser.tmp_buf.items });
+            if (std.mem.eql(u8, it.name, typename)) return true;
+            if (std.mem.startsWith(u8, typename, protofile.package)) {
+                const rest = typename[protofile.package.len..];
+                if (rest.len > 0 and rest[0] == '.') {
+                    if (std.mem.eql(u8, rest[1..], it.name)) return true;
+                }
+            }
+
+            // FIXME this is incomplete and will only match singly nested
+            //       typename such as 'Struct.FieldEntry'
+            const parent_name = parser.tmp_buf.items;
+            if (std.mem.startsWith(u8, typename, parent_name)) {
+                const rest = typename[parent_name.len..];
+                if (rest.len > 0 and rest[0] == '.') {
+                    return parser.findTypenameInner(rest[1..], it, protofile);
+                }
+            }
+            return false;
+        }
+
+        fn findTypename(parser: *Self, typename: []const u8) !?FieldDescriptorProto.Type {
+            parser.tmp_buf.items.len = 0;
+            for (parser.req.proto_file.items) |protofile| {
+                for (protofile.enum_type.items) |it|
+                    if (try parser.findTypenameInner(typename, it, protofile))
+                        return .TYPE_ENUM;
+
+                for (protofile.message_type.items) |it| {
+                    if (try parser.findTypenameInner(typename, it, protofile))
+                        return .TYPE_MESSAGE;
+                    try parser.tmp_buf.ensureTotalCapacity(parser.arena, it.name.len);
+                    parser.tmp_buf.items.len = it.name.len;
+                    std.mem.copy(u8, parser.tmp_buf.items, it.name);
+                    for (it.nested_type.items) |nit| {
+                        if (try parser.findTypenameInner(typename, nit, protofile))
+                            return .TYPE_MESSAGE;
+                    }
+                }
+            }
+            return null;
+        }
+
+        // fixup field types set to .TYPE_ERROR which couldn't be resolved
         fn fixupFieldTypes(parser: *Self, it: *DescriptorProto, file: *File) Error!void {
             for (it.field.items) |*f| {
                 // std.debug.print("f.type_name {s}\n", .{f.type_name});
@@ -338,20 +381,20 @@ pub fn Parser(comptime ErrWriter: type) type {
         }
 
         fn parseEnum(parser: *Self, start: TokenIndex, scope: *Scope, file: *File) Error!void {
+            _ = scope;
             var enum_node = try file.descriptor.enum_type.addOne(parser.arena);
             enum_node.* = .{};
             file.descriptor.setPresent(.enum_type);
             const source_code_info = try parser.arena.create(descriptor.SourceCodeInfo);
-            file.descriptor.source_code_info = source_code_info;
             source_code_info.* = .{};
-            _ = scope;
+            file.descriptor.set(.source_code_info, source_code_info);
 
             const name = try parser.expectToken(.identifier, file);
             enum_node.set(.name, tokenIdContent(name, file));
             var location: SourceCodeInfo.Location = .{};
             try addToLocation(parser.arena, &location, source_code_info, file.token_it.tokens[start]);
-
             _ = try parser.expectToken(.l_brace, file);
+
             while (true) {
                 const pos = file.token_it.pos;
                 const token = file.token_it.next();
@@ -399,7 +442,6 @@ pub fn Parser(comptime ErrWriter: type) type {
                     else => return parser.fail("unexpected token: {}", .{token.id}, pos, file),
                 }
             }
-            file.descriptor.setPresent(.source_code_info);
 
             try source_code_info.location.append(parser.arena, location);
         }
@@ -497,50 +539,6 @@ pub fn Parser(comptime ErrWriter: type) type {
             const rest = parser.tmp_buf.items[prefix.len..];
             _ = std.ascii.upperString(rest, typename);
             return std.meta.stringToEnum(FieldDescriptorProto.Type, parser.tmp_buf.items);
-        }
-
-        fn findTypenameInner(parser: *Self, typename: []const u8, it: anytype, protofile: FileDescriptorProto) Allocator.Error!bool {
-            if (std.mem.eql(u8, it.name, typename)) return true;
-            if (std.mem.startsWith(u8, typename, protofile.package)) {
-                const rest = typename[protofile.package.len..];
-                if (rest.len > 0 and rest[0] == '.') {
-                    if (std.mem.eql(u8, rest[1..], it.name)) return true;
-                }
-            }
-
-            // std.debug.print("findTypenameInner typename {s} it.name {s} parser.tmp_buf {s}\n", .{ typename, it.name, parser.tmp_buf.items });
-            // FIXME this is incomplete and will only match singly nested
-            //       typename such as 'Struct.FieldEntry'
-            const parent_name = parser.tmp_buf.items;
-            if (std.mem.startsWith(u8, typename, parent_name)) {
-                const rest = typename[parent_name.len..];
-                if (rest.len > 0 and rest[0] == '.') {
-                    return parser.findTypenameInner(rest[1..], it, protofile);
-                }
-            }
-            return false;
-        }
-
-        fn findTypename(parser: *Self, typename: []const u8) !?FieldDescriptorProto.Type {
-            parser.tmp_buf.items.len = 0;
-            for (parser.req.proto_file.items) |protofile| {
-                for (protofile.enum_type.items) |it|
-                    if (try parser.findTypenameInner(typename, it, protofile))
-                        return .TYPE_ENUM;
-
-                for (protofile.message_type.items) |it| {
-                    if (try parser.findTypenameInner(typename, it, protofile))
-                        return .TYPE_MESSAGE;
-                    try parser.tmp_buf.ensureTotalCapacity(parser.arena, it.name.len);
-                    parser.tmp_buf.items.len = it.name.len;
-                    std.mem.copy(u8, parser.tmp_buf.items, it.name);
-                    for (it.nested_type.items) |nit| {
-                        if (try parser.findTypenameInner(typename, nit, protofile))
-                            return .TYPE_MESSAGE;
-                    }
-                }
-            }
-            return null;
         }
 
         fn parseField(parser: *Self, field: *FieldDescriptorProto, pos: TokenIndex, token: Token, file: *File, parent_message: *DescriptorProto) Error!void {
