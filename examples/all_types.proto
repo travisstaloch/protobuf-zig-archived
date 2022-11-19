@@ -47,8 +47,8 @@ message All {
   ForeignEnum opt_foreign_enum = 22;
   AliasedEnum opt_aliased_enum = 23;
 
-  // FIXME string opt_string_piece = 24 [ctype = STRING_PIECE];
-  // FIXME string opt_cord = 25 [ctype = CORD];
+  string opt_string_piece = 24 [ctype = STRING_PIECE];
+  string opt_cord = 25 [ctype = CORD];
   All recursive_message = 27;
 
   repeated int32 rep_int32 = 31;
@@ -73,8 +73,8 @@ message All {
   repeated NestedEnum rep_nested_enum = 51;
   repeated ForeignEnum rep_foreign_enum = 52;
   repeated AliasedEnum rep_aliased_enum = 53;
-  // FIXME repeated string rep_string_piece = 54 [ctype = STRING_PIECE];
-  // FIXME repeated string rep_cord = 55 [ctype = CORD];
+  repeated string rep_string_piece = 54 [ctype = STRING_PIECE];
+  repeated string rep_cord = 55 [ctype = CORD];
 
   // Packed
   repeated int32 packed_int32 = 75 [packed = true];

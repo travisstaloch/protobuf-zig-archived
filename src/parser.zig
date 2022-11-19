@@ -208,6 +208,14 @@ pub fn Parser(comptime ErrWriter: type) type {
                             options.set(fe, try parser.parseBool(contentid, file));
                             return true;
                         },
+                        .Enum => {
+                            const content = tokenIdContent(contentid, file);
+                            const e = std.meta.stringToEnum(f.field_type, content) orelse
+                                return parser.fail("invalid value '{s}' for enum type '{s}'", .{ content, @typeName(f.field_type) }, contentid, file);
+                            options.set(fe, e);
+                            return true;
+                        },
+
                         else => if (comptime std.meta.trait.isZigString(f.field_type)) {
                             const content = tokenIdContent(contentid, file);
                             // trim leading/trailing quotes
@@ -218,7 +226,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                             options.set(fe, content_trimmed);
                             return true;
                         } else {
-                            return parser.fail("TODO field '{s}' handle type {s} or parse as uninterpreted_option", .{ optname, @tagName(info) }, nameid, file);
+                            return parser.fail("TODO: option '{s}' handle type {s} or parse as uninterpreted_option", .{ optname, @tagName(info) }, nameid, file);
                         },
                     }
                 }
