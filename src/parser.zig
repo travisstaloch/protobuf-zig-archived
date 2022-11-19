@@ -128,6 +128,47 @@ pub fn Parser(comptime ErrWriter: type) type {
                     .keyword_message => {
                         try parser.parseMessage(pos, &file.scope, file, null);
                     },
+                    .keyword_option => {
+                        // option[0] = try parser.expectToken(.identifier, file);
+                        const nameid = try parser.expectToken(.identifier, file);
+                        _ = try parser.expectToken(.equal, file);
+                        const contentid = try parser.expectTokenIn(&.{ .string_literal, .int_literal, .identifier }, file);
+                        _ = try parser.expectToken(.semicolon, file);
+                        const optname = tokenIdContent(nameid, file);
+                        const option = if (file.descriptor.options) |o| o else blk: {
+                            const o = try parser.arena.create(descriptor.FileOptions);
+                            o.* = .{};
+                            break :blk o;
+                        };
+                        inline for (std.meta.fields(descriptor.FileOptions)) |f| {
+                            @setEvalBranchQuota(8000);
+                            if (comptime std.mem.eql(u8, f.name, "__fields_present")) continue;
+                            if (std.mem.eql(u8, f.name, optname)) {
+                                // todo("found option field {s}", .{id});
+
+                                const fe = comptime std.meta.stringToEnum(descriptor.FileOptions.FileOptionsFieldEnum, f.name) orelse
+                                    @compileError("enum value not found for field '" ++ f.name ++ "'");
+                                const info = @typeInfo(f.field_type);
+                                switch (info) {
+                                    .Bool => {
+                                        option.set(fe, try parser.parseBool(contentid, file));
+                                        break;
+                                    },
+                                    else => if (comptime std.meta.trait.isZigString(f.field_type)) {
+                                        // @field(option, f.name) = optcontent;
+                                        option.set(fe, tokenIdContent(contentid, file));
+                                        break;
+                                    } else {
+                                        return parser.fail("TODO field '{s}' handle type {s} or parse as uninterpreted_option", .{ optname, @tagName(info) }, nameid, file);
+                                    },
+                                }
+                            }
+                        } else {
+                            // var uo = option.uninterpreted_option.addOne(parser.arena);
+                            // option.setPresent(.uninterpreted_option);
+                            return parser.fail("TODO parse uninterpreted_option {s}", .{optname}, nameid, file);
+                        }
+                    },
                     else => return parser.fail("TODO unhandled token '{s}' ", .{tokenContent(token, file)}, pos, file),
                 }
             }
@@ -135,6 +176,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                 parser.req.setPresent(.file_to_generate);
                 try parser.req.file_to_generate.append(parser.arena, file_base);
             }
+
             // parse imported files
             for (file.descriptor.dependency.items) |dep_name| {
                 const depfile = parser.deps_map.get(dep_name).?;
@@ -150,9 +192,11 @@ pub fn Parser(comptime ErrWriter: type) type {
                 for (it.field.items) |*f| {
                     if (f.type == .TYPE_ERROR) {
                         if (!f.has(.type_name))
+                            // TODO correct pos
                             return parser.fail("missing field.type_name for field {s}", .{f.name}, 0, file);
                         const fty = parser.findTypename(f.type_name) orelse
-                            return parser.fail("invalid typename {s}", .{f.type_name}, 0, file);
+                            // TODO correct pos
+                            return parser.fail("invalid typename '{s}'", .{f.type_name}, 0, file);
                         f.set(.type, fty);
                     }
                 }
@@ -173,7 +217,6 @@ pub fn Parser(comptime ErrWriter: type) type {
                         var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
                         var fba = std.heap.FixedBufferAllocator.init(&buf);
                         const path_full = try std.fs.path.join(fba.allocator(), &.{ path, filename_trimmed });
-
                         if (std.fs.cwd().openFile(path_full, .{})) |f| {
                             realpath = try std.fs.cwd().realpath(path_full, &buf0);
                             break :blk f;
@@ -329,9 +372,10 @@ pub fn Parser(comptime ErrWriter: type) type {
                 const token = file.token_it.next();
                 switch (token.id) {
                     .identifier, .identifier_dotted, .keyword_repeated, .keyword_optional, .keyword_required, .keyword_map => {
-                        var field: FieldDescriptorProto = .{};
-                        try parser.parseField(&field, pos, token, file);
-                        try message_node.field.append(parser.arena, field);
+                        // var field: FieldDescriptorProto = .{};
+                        var field = try message_node.field.addOne(parser.arena);
+                        field.* = .{};
+                        try parser.parseField(field, pos, token, file);
                         message_node.setPresent(.field);
                         // // honor syntax
                         // //   proto2: field label is required
@@ -358,6 +402,31 @@ pub fn Parser(comptime ErrWriter: type) type {
                     .keyword_message => {
                         try parser.parseMessage(pos, scoped_descr.scope.?, file, scope);
                     },
+                    .keyword_oneof => {
+                        // var oneof: MessageNode.OneOfField = .{ .name = undefined };
+                        const oneof = try message_node.oneof_decl.addOne(parser.arena);
+                        const nameid = try parser.expectToken(.identifier, file);
+                        oneof.set(.name, tokenIdContent(nameid, file));
+                        _ = try parser.expectToken(.l_brace, file);
+                        while (true) {
+                            // var field: MessageNode.Field = .{ .tokens = undefined };
+                            var field = try message_node.field.addOne(parser.arena);
+                            field.* = .{};
+                            const fieldpos = file.token_it.pos;
+                            try parser.parseField(field, fieldpos, file.token_it.next(), file);
+                            message_node.setPresent(.field);
+
+                            // TODO proto3 - verify field type not map
+                            if (file.syntax == .proto3) {
+                                if (field.label == .LABEL_REPEATED) {
+                                    return parser.fail("repeated oneof fields are not allowed in proto3", .{}, fieldpos, file);
+                                }
+                            }
+
+                            if (consumeToken(.r_brace, file)) |_| break;
+                        }
+                    },
+
                     else => return parser.fail("unexpected token: {}", .{token.id}, pos, file),
                 }
             }
@@ -400,11 +469,7 @@ pub fn Parser(comptime ErrWriter: type) type {
 
         fn parseField(parser: *Self, field: *FieldDescriptorProto, pos: TokenIndex, token: Token, file: *File) Error!void {
             // field.tokens[0] = pos;
-            const typename = tokenIdContent(pos, file);
-            if (try parser.parseProtoFieldType(typename)) |ty|
-                field.set(.type, ty)
-            else
-                field.set(.type_name, typename);
+            var typenameid = pos;
 
             if (file.syntax == .proto3) field.set(.label, .LABEL_OPTIONAL);
             blk: {
@@ -414,18 +479,31 @@ pub fn Parser(comptime ErrWriter: type) type {
                     .keyword_required => field.set(.label, .LABEL_REQUIRED),
                     else => break :blk,
                 }
-                // field.tokens[0] = file.token_it.pos;
+                typenameid = file.token_it.pos;
                 _ = file.token_it.next();
             }
+            const typename = tokenIdContent(typenameid, file);
+            if (try parser.parseProtoFieldType(typename)) |ty|
+                field.set(.type, ty)
+            else
+                field.set(.type_name, typename);
+
             if (token.id == .keyword_map) {
                 _ = try parser.expectToken(.lt, file);
                 // TODO save ident
-                _ = try parser.expectTokenIn(&.{ .identifier, .identifier_dotted }, file);
+                const keytid = try parser.expectTokenIn(&.{ .identifier, .identifier_dotted }, file);
                 _ = try parser.expectToken(.comma, file);
                 // TODO save ident
-                _ = try parser.expectTokenIn(&.{ .identifier, .identifier_dotted }, file);
+                const valtid = try parser.expectTokenIn(&.{ .identifier, .identifier_dotted }, file);
                 _ = try parser.expectToken(.gt, file);
                 field.set(.label, .LABEL_REPEATED);
+                field.set(.type, .TYPE_MESSAGE);
+                const maptypename = try std.fmt.allocPrint(
+                    parser.arena,
+                    "map<{s},{s}>",
+                    .{ tokenIdContent(keytid, file), tokenIdContent(valtid, file) },
+                );
+                field.set(.type_name, maptypename);
             }
 
             // TODO save location
