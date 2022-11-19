@@ -187,19 +187,27 @@ pub fn Parser(comptime ErrWriter: type) type {
                 }
             }
 
-            // fixup field types which couldn't be resolved
             for (file.descriptor.message_type.items) |*it| {
-                for (it.field.items) |*f| {
-                    if (f.type == .TYPE_ERROR) {
-                        if (!f.has(.type_name))
-                            // TODO correct pos
-                            return parser.fail("missing field.type_name for field {s}", .{f.name}, 0, file);
-                        const fty = parser.findTypename(f.type_name) orelse
-                            // TODO correct pos
-                            return parser.fail("invalid typename '{s}'", .{f.type_name}, 0, file);
-                        f.set(.type, fty);
-                    }
+                try parser.fixupFieldTypes(it, file);
+            }
+        }
+
+        // fixup field types which couldn't be resolved
+        fn fixupFieldTypes(parser: *Self, it: *DescriptorProto, file: *File) Error!void {
+            for (it.field.items) |*f| {
+                // std.debug.print("f.type_name {s}\n", .{f.type_name});
+                if (f.type == .TYPE_ERROR) {
+                    if (!f.has(.type_name))
+                        // TODO correct pos
+                        return parser.fail("missing field.type_name for field {s}", .{f.name}, 0, file);
+                    const fty = try parser.findTypename(f.type_name) orelse
+                        // TODO correct pos
+                        return parser.fail("invalid typename '{s}'", .{f.type_name}, 0, file);
+                    f.set(.type, fty);
                 }
+            }
+            for (it.nested_type.items) |*nit| {
+                try parser.fixupFieldTypes(nit, file);
             }
         }
 
@@ -375,7 +383,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         // var field: FieldDescriptorProto = .{};
                         var field = try message_node.field.addOne(parser.arena);
                         field.* = .{};
-                        try parser.parseField(field, pos, token, file);
+                        try parser.parseField(field, pos, token, file, message_node);
                         message_node.setPresent(.field);
                         // // honor syntax
                         // //   proto2: field label is required
@@ -413,7 +421,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                             var field = try message_node.field.addOne(parser.arena);
                             field.* = .{};
                             const fieldpos = file.token_it.pos;
-                            try parser.parseField(field, fieldpos, file.token_it.next(), file);
+                            try parser.parseField(field, fieldpos, file.token_it.next(), file, message_node);
                             message_node.setPresent(.field);
 
                             // TODO proto3 - verify field type not map
@@ -443,7 +451,7 @@ pub fn Parser(comptime ErrWriter: type) type {
             return std.meta.stringToEnum(FieldDescriptorProto.Type, parser.tmp_buf.items);
         }
 
-        inline fn findTypenameInner(typename: []const u8, it: anytype, protofile: FileDescriptorProto) bool {
+        fn findTypenameInner(parser: *Self, typename: []const u8, it: anytype, protofile: FileDescriptorProto) Allocator.Error!bool {
             if (std.mem.eql(u8, it.name, typename)) return true;
             if (std.mem.startsWith(u8, typename, protofile.package)) {
                 const rest = typename[protofile.package.len..];
@@ -451,23 +459,43 @@ pub fn Parser(comptime ErrWriter: type) type {
                     if (std.mem.eql(u8, rest[1..], it.name)) return true;
                 }
             }
+
+            // std.debug.print("findTypenameInner typename {s} it.name {s} parser.tmp_buf {s}\n", .{ typename, it.name, parser.tmp_buf.items });
+            // FIXME this is incomplete and will only match singly nested
+            //       typename such as 'Struct.FieldEntry'
+            const parent_name = parser.tmp_buf.items;
+            if (std.mem.startsWith(u8, typename, parent_name)) {
+                const rest = typename[parent_name.len..];
+                if (rest.len > 0 and rest[0] == '.') {
+                    return parser.findTypenameInner(rest[1..], it, protofile);
+                }
+            }
             return false;
         }
 
-        fn findTypename(parser: *Self, typename: []const u8) ?FieldDescriptorProto.Type {
+        fn findTypename(parser: *Self, typename: []const u8) !?FieldDescriptorProto.Type {
+            parser.tmp_buf.items.len = 0;
             for (parser.req.proto_file.items) |protofile| {
                 for (protofile.enum_type.items) |it|
-                    if (findTypenameInner(typename, it, protofile))
+                    if (try parser.findTypenameInner(typename, it, protofile))
                         return .TYPE_ENUM;
 
-                for (protofile.message_type.items) |it|
-                    if (findTypenameInner(typename, it, protofile))
+                for (protofile.message_type.items) |it| {
+                    if (try parser.findTypenameInner(typename, it, protofile))
                         return .TYPE_MESSAGE;
+                    try parser.tmp_buf.ensureTotalCapacity(parser.arena, it.name.len);
+                    parser.tmp_buf.items.len = it.name.len;
+                    std.mem.copy(u8, parser.tmp_buf.items, it.name);
+                    for (it.nested_type.items) |nit| {
+                        if (try parser.findTypenameInner(typename, nit, protofile))
+                            return .TYPE_MESSAGE;
+                    }
+                }
             }
             return null;
         }
 
-        fn parseField(parser: *Self, field: *FieldDescriptorProto, pos: TokenIndex, token: Token, file: *File) Error!void {
+        fn parseField(parser: *Self, field: *FieldDescriptorProto, pos: TokenIndex, token: Token, file: *File, parent_message: *DescriptorProto) Error!void {
             // field.tokens[0] = pos;
             var typenameid = pos;
 
@@ -497,13 +525,49 @@ pub fn Parser(comptime ErrWriter: type) type {
                 const valtid = try parser.expectTokenIn(&.{ .identifier, .identifier_dotted }, file);
                 _ = try parser.expectToken(.gt, file);
                 field.set(.label, .LABEL_REPEATED);
-                field.set(.type, .TYPE_MESSAGE);
-                const maptypename = try std.fmt.allocPrint(
-                    parser.arena,
-                    "map<{s},{s}>",
-                    .{ tokenIdContent(keytid, file), tokenIdContent(valtid, file) },
-                );
-                field.set(.type_name, maptypename);
+                field.set(.type, .TYPE_ERROR);
+                const field_tyname = try std.fmt.allocPrint(parser.arena, "{s}.FieldsEntry", .{parent_message.name});
+                field.set(.type_name, field_tyname);
+
+                // create the nested_type entry
+                const map_type = try parent_message.nested_type.addOne(parser.arena);
+                map_type.* = .{};
+                map_type.set(.name, "FieldsEntry");
+                map_type.setPresent(.field);
+                const options = try parser.arena.create(descriptor.MessageOptions);
+                options.* = .{};
+                options.set(.map_entry, true);
+                map_type.set(.options, options);
+
+                // create nested_type.key field
+                const kfield = try map_type.field.addOne(parser.arena);
+                kfield.* = .{};
+                kfield.set(.name, "key");
+                kfield.set(.json_name, "key");
+                kfield.set(.number, 1);
+                kfield.set(.label, .LABEL_OPTIONAL);
+                const keytyname = tokenIdContent(keytid, file);
+                const keyty = if (try parser.parseProtoFieldType(keytyname)) |ty|
+                    ty
+                else
+                    return parser.fail("invalid key type '{s}'", .{keytyname}, keytid, file);
+                kfield.set(.type, keyty);
+
+                // create nested_type.value field
+                const vfield = try map_type.field.addOne(parser.arena);
+                vfield.* = .{};
+                vfield.set(.name, "value");
+                vfield.set(.json_name, "value");
+                vfield.set(.number, 2);
+                vfield.set(.label, .LABEL_OPTIONAL);
+                const valtyname = tokenIdContent(valtid, file);
+                if (try parser.parseProtoFieldType(valtyname)) |ty| {
+                    vfield.set(.type, ty);
+                } else {
+                    vfield.set(.type, .TYPE_ERROR);
+                    vfield.set(.type_name, valtyname);
+                }
+                parent_message.setPresent(.nested_type);
             }
 
             // TODO save location
