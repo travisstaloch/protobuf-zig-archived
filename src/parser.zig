@@ -135,39 +135,26 @@ pub fn Parser(comptime ErrWriter: type) type {
                         const contentid = try parser.expectTokenIn(&.{ .string_literal, .int_literal, .identifier }, file);
                         _ = try parser.expectToken(.semicolon, file);
                         const optname = tokenIdContent(nameid, file);
-                        const option = if (file.descriptor.options) |o| o else blk: {
+                        const options = if (file.descriptor.options) |o| o else blk: {
                             const o = try parser.arena.create(descriptor.FileOptions);
                             o.* = .{};
                             break :blk o;
                         };
-                        inline for (std.meta.fields(descriptor.FileOptions)) |f| {
-                            @setEvalBranchQuota(8000);
-                            if (comptime std.mem.eql(u8, f.name, "__fields_present")) continue;
-                            if (std.mem.eql(u8, f.name, optname)) {
-                                // todo("found option field {s}", .{id});
 
-                                const fe = comptime std.meta.stringToEnum(descriptor.FileOptions.FileOptionsFieldEnum, f.name) orelse
-                                    @compileError("enum value not found for field '" ++ f.name ++ "'");
-                                const info = @typeInfo(f.field_type);
-                                switch (info) {
-                                    .Bool => {
-                                        option.set(fe, try parser.parseBool(contentid, file));
-                                        break;
-                                    },
-                                    else => if (comptime std.meta.trait.isZigString(f.field_type)) {
-                                        // @field(option, f.name) = optcontent;
-                                        option.set(fe, tokenIdContent(contentid, file));
-                                        break;
-                                    } else {
-                                        return parser.fail("TODO field '{s}' handle type {s} or parse as uninterpreted_option", .{ optname, @tagName(info) }, nameid, file);
-                                    },
-                                }
-                            }
-                        } else {
-                            // var uo = option.uninterpreted_option.addOne(parser.arena);
-                            // option.setPresent(.uninterpreted_option);
-                            return parser.fail("TODO parse uninterpreted_option {s}", .{optname}, nameid, file);
-                        }
+                        const matched = try parser.parseOptions(
+                            descriptor.FileOptions,
+                            descriptor.FileOptions.FileOptionsFieldEnum,
+                            optname,
+                            nameid,
+                            options,
+                            contentid,
+                            file,
+                        );
+
+                        if (!matched)
+                            return parser.fail("failed to match file option {s}", .{optname}, nameid, file);
+
+                        file.descriptor.set(.options, options);
                     },
                     else => return parser.fail("TODO unhandled token '{s}' ", .{tokenContent(token, file)}, pos, file),
                 }
@@ -190,6 +177,57 @@ pub fn Parser(comptime ErrWriter: type) type {
             for (file.descriptor.message_type.items) |*it| {
                 try parser.fixupFieldTypes(it, file);
             }
+        }
+
+        fn parseOptions(
+            parser: *Self,
+            comptime T: type,
+            comptime E: type,
+            optname: []const u8,
+            nameid: TokenIndex,
+            options: *T,
+            contentid: TokenIndex,
+            file: *File,
+        ) Error!bool {
+            inline for (std.meta.fields(T)) |f| {
+                @setEvalBranchQuota(8000);
+                if (comptime std.mem.eql(u8, f.name, "__fields_present")) continue;
+
+                const last_uscore_idx = comptime blk: {
+                    var lasttuidx = f.name.len - 1;
+                    while (f.name[lasttuidx] == '_') lasttuidx -= 1;
+                    break :blk lasttuidx;
+                };
+
+                if (std.mem.eql(u8, f.name[0 .. last_uscore_idx + 1], optname)) {
+                    const fe = comptime std.meta.stringToEnum(E, f.name) orelse
+                        @compileError("enum value not found for field '" ++ f.name ++ "'");
+                    const info = @typeInfo(f.field_type);
+                    switch (info) {
+                        .Bool => {
+                            options.set(fe, try parser.parseBool(contentid, file));
+                            return true;
+                        },
+                        else => if (comptime std.meta.trait.isZigString(f.field_type)) {
+                            const content = tokenIdContent(contentid, file);
+                            // trim leading/trailing quotes
+                            const content_trimmed = if (content.len > 1 and content[0] == '"' and content[content.len - 1] == '"')
+                                content[1 .. content.len - 1]
+                            else
+                                content;
+                            options.set(fe, content_trimmed);
+                            return true;
+                        } else {
+                            return parser.fail("TODO field '{s}' handle type {s} or parse as uninterpreted_option", .{ optname, @tagName(info) }, nameid, file);
+                        },
+                    }
+                }
+            } else {
+                // var uo = option.uninterpreted_option.addOne(parser.arena);
+                // option.setPresent(.uninterpreted_option);
+                return parser.fail("TODO parse uninterpreted_option {s}", .{optname}, nameid, file);
+            }
+            return false;
         }
 
         // fixup field types which couldn't be resolved
@@ -243,7 +281,6 @@ pub fn Parser(comptime ErrWriter: type) type {
             var gop = try parser.deps_map.getOrPut(parser.arena, realpath_dupe);
 
             if (!gop.found_existing) {
-                const file_base = std.fs.path.basename(realpath_dupe);
                 const new_file = try parser.arena.create(File);
                 new_file.* = File.init(
                     try f.readToEndAllocOptions(parser.arena, std.math.maxInt(u32), null, 1, 0),
@@ -251,8 +288,8 @@ pub fn Parser(comptime ErrWriter: type) type {
                     undefined, // file.descriptor is undefined. will be set later in parseFile
                 );
                 file.descriptor.setPresent(.dependency);
-                try file.descriptor.dependency.append(parser.arena, file_base);
-                try parser.deps_map.put(parser.arena, file_base, new_file);
+                try file.descriptor.dependency.append(parser.arena, filename_trimmed);
+                try parser.deps_map.put(parser.arena, filename_trimmed, new_file);
                 gop.value_ptr.* = new_file;
             } else {
                 // assert(gop.value_ptr.name == .import);
@@ -411,8 +448,10 @@ pub fn Parser(comptime ErrWriter: type) type {
                         try parser.parseMessage(pos, scoped_descr.scope.?, file, scope);
                     },
                     .keyword_oneof => {
-                        // var oneof: MessageNode.OneOfField = .{ .name = undefined };
+                        const oneof_id = message_node.oneof_decl.items.len;
                         const oneof = try message_node.oneof_decl.addOne(parser.arena);
+                        oneof.* = .{};
+                        message_node.setPresent(.oneof_decl);
                         const nameid = try parser.expectToken(.identifier, file);
                         oneof.set(.name, tokenIdContent(nameid, file));
                         _ = try parser.expectToken(.l_brace, file);
@@ -422,6 +461,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                             field.* = .{};
                             const fieldpos = file.token_it.pos;
                             try parser.parseField(field, fieldpos, file.token_it.next(), file, message_node);
+                            field.set(.oneof_index, @intCast(i32, oneof_id));
                             message_node.setPresent(.field);
 
                             // TODO proto3 - verify field type not map
@@ -587,11 +627,33 @@ pub fn Parser(comptime ErrWriter: type) type {
                 // TODO: [packed = true] can only be specified for repeated primitive fields
                 // const option = try field.options.addOne(parser.arena);
                 // TODO save option data/location
-                _ = try parser.expectToken(.identifier, file);
+                const optnameid = try parser.expectToken(.identifier, file);
                 _ = try parser.expectToken(.equal, file);
                 // TODO save option data/location
-                _ = try parser.expectTokenIn(&.{.identifier}, file);
+                const optvalid = try parser.expectTokenIn(&.{.identifier}, file);
                 _ = try parser.expectToken(.r_sbrace, file);
+
+                const options = if (field.options) |o| o else blk: {
+                    const o = try parser.arena.create(descriptor.FieldOptions);
+                    o.* = .{};
+                    break :blk o;
+                };
+
+                const optname = tokenIdContent(optnameid, file);
+                const matched = try parser.parseOptions(
+                    descriptor.FieldOptions,
+                    descriptor.FieldOptions.FieldOptionsFieldEnum,
+                    optname,
+                    nameid,
+                    options,
+                    optvalid,
+                    file,
+                );
+
+                if (!matched)
+                    return parser.fail("failed to match field option {s}", .{optname}, nameid, file);
+
+                field.set(.options, options);
             }
             _ = try parser.expectToken(.semicolon, file);
         }
