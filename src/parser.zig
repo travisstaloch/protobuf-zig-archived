@@ -97,32 +97,6 @@ pub fn Parser(comptime ErrWriter: type) type {
             return p.req;
         }
 
-        fn findTypenameScoped(typename: []const u8, scope_: *const Scope) ?FieldDescriptorProto.Type {
-            var mscope: ?*const Scope = scope_;
-            while (mscope) |scope| : (mscope = scope.parent) {
-                // std.debug.print("findTypenameScoped({s}) node tag {s} name {s}\n", .{ typename, @tagName(scope.node), scope.node.name() });
-                switch (scope.node) {
-                    .file => |f| {
-                        for (f.enum_type.items) |e| {
-                            if (std.mem.eql(u8, typename, e.name)) return .TYPE_ENUM;
-                        }
-                        for (f.message_type.items) |m| {
-                            if (std.mem.eql(u8, typename, m.name)) return .TYPE_MESSAGE;
-                        }
-                    },
-                    .message => |m| {
-                        if (std.mem.eql(u8, typename, m.name)) return .TYPE_MESSAGE;
-                        for (m.enum_type.items) |e|
-                            if (std.mem.eql(u8, typename, e.name)) return .TYPE_ENUM;
-                    },
-                    .enum_ => |e| {
-                        if (std.mem.eql(u8, typename, e.name)) return .TYPE_ENUM;
-                    },
-                }
-            }
-            return null;
-        }
-
         pub fn parseFile(parser: *Self, file: *File, ty: File.ImportType) !void {
             parser.req.setPresent(.proto_file);
             file.descriptor = try parser.req.proto_file.addOne(parser.arena);
@@ -289,13 +263,26 @@ pub fn Parser(comptime ErrWriter: type) type {
             return false;
         }
 
+        inline fn matchPackage(typename: []const u8, package: []const u8, it: anytype) bool {
+            if (std.mem.startsWith(u8, typename, package)) {
+                const rest = typename[package.len..];
+                if (rest.len > 0 and rest[0] == '.' and
+                    std.mem.eql(u8, rest[1..], it.name))
+                    return true;
+            }
+            return false;
+        }
+
         fn findTypenameInner(parser: *Self, typename: []const u8, it: anytype, parent: anytype) Allocator.Error!bool {
-            // std.debug.print("findTypenameInner typename {s} it.name {s} parser.tmp_buf {s}\n", .{ typename, it.name, parser.tmp_buf.items });
+            std.log.debug("findTypenameInner typename {s} it.name {s} parser.tmp_buf {s}", .{ typename, it.name, parser.tmp_buf.items });
             if (std.mem.eql(u8, it.name, typename)) return true;
-            if (std.mem.startsWith(u8, typename, parent.package)) {
-                const rest = typename[parent.package.len..];
-                if (rest.len > 0 and rest[0] == '.') {
-                    if (std.mem.eql(u8, rest[1..], it.name)) return true;
+            const Parent = @TypeOf(parent);
+            const parentinfo = @typeInfo(Parent);
+            if (parentinfo != .Optional) {
+                if (matchPackage(typename, parent.package, it)) return true;
+            } else if (@hasDecl(parentinfo.Optional.child, "package")) {
+                if (parent) |parent_| {
+                    if (matchPackage(typename, parent_.package, it)) return true;
                 }
             }
             // FIXME this is incomplete and will only match singly nested
@@ -310,44 +297,77 @@ pub fn Parser(comptime ErrWriter: type) type {
             return false;
         }
 
-        fn findTypename(parser: *Self, typename_: []const u8, _: *DescriptorProto) !?FieldDescriptorProto.Type {
-            // std.debug.print("findTypename typename_ {s} parent.name {s} \n", .{ typename_, parent.name });
+        fn findTypename(
+            parser: *Self,
+            typename_: []const u8,
+            scope: *const Scope,
+            file: *const File,
+        ) !?FieldDescriptorProto.Type {
+            std.log.debug("findTypename typename: {s}", .{typename_});
 
             if (typename_.len == 0) return null;
             parser.tmp_buf.items.len = 0;
             const absolute_path = typename_[0] == '.';
-            // std.debug.print("typename_ {s}\n", .{typename_});
             if (absolute_path) {
                 const typename = typename_[1..];
 
-                for (parser.root_file.descriptor.enum_type.items) |it|
-                    if (try parser.findTypenameInner(typename, it, parser.root_file.descriptor))
+                for (file.descriptor.enum_type.items) |it|
+                    if (try parser.findTypenameInner(typename, it, file.descriptor))
                         return .TYPE_ENUM;
 
-                for (parser.root_file.descriptor.message_type.items) |it| {
-                    if (try parser.findTypenameInner(typename, it, parser.root_file.descriptor))
+                for (file.descriptor.message_type.items) |it| {
+                    if (try parser.findTypenameInner(typename, it, file.descriptor))
                         return .TYPE_MESSAGE;
                     try parser.tmp_buf.ensureTotalCapacity(parser.arena, it.name.len);
                     parser.tmp_buf.items.len = it.name.len;
                     std.mem.copy(u8, parser.tmp_buf.items, it.name);
                     for (it.nested_type.items) |nit| {
-                        if (try parser.findTypenameInner(typename, nit, parser.root_file.descriptor))
+                        if (try parser.findTypenameInner(typename, nit, file.descriptor))
                             return .TYPE_MESSAGE;
                     }
                 }
             } else {
-                // TODO !absolute_path
+                return parser.findTypenameScoped(typename_, scope);
+            }
+            return null;
+        }
+
+        fn findTypenameScoped(p: *Self, typename: []const u8, scope_: *const Scope) ?FieldDescriptorProto.Type {
+            var mscope: ?*const Scope = scope_;
+            while (mscope) |scope| : (mscope = scope.parent) {
+                const parent_node = if (scope.parent) |parent| parent.node else null;
+                std.log.debug("findTypenameScoped({s}) node tag {s} name {s}", .{ typename, @tagName(scope.node), scope.node.name() });
+                switch (scope.node) {
+                    .file => |f| {
+                        for (f.enum_type.items) |it|
+                            if ((p.findTypenameInner(typename, it, parent_node) catch null) != null) return .TYPE_ENUM;
+                        for (f.message_type.items) |it|
+                            if ((p.findTypenameInner(typename, it, parent_node) catch null) != null) return .TYPE_MESSAGE;
+                    },
+                    .message => |m| {
+                        if ((p.findTypenameInner(typename, m, parent_node) catch null) != null) return .TYPE_MESSAGE;
+
+                        for (m.enum_type.items) |it|
+                            if ((p.findTypenameInner(typename, it, parent_node) catch null) != null) return .TYPE_ENUM;
+                        for (m.nested_type.items) |it|
+                            if ((p.findTypenameInner(typename, it, parent_node) catch null) != null) return .TYPE_MESSAGE;
+                    },
+                    .enum_ => |e| {
+                        if ((p.findTypenameInner(typename, e, parent_node) catch null) != null) return .TYPE_ENUM;
+                    },
+                }
             }
             return null;
         }
 
         // fixup field types set to .TYPE_ERROR which couldn't be resolved
         fn fixupFieldTypes(p: *Self, typename: []const u8, scoped_field: ScopedField) Error!void {
-            var mty = findTypenameScoped(typename, scoped_field.scope);
+            std.log.debug("fixupFieldTypes {s}", .{typename});
+            var mty = p.findTypenameScoped(typename, scoped_field.scope);
             if (mty == null) {
                 var depsiter = p.deps_map.iterator();
                 while (depsiter.next()) |dep| {
-                    if (findTypenameScoped(typename, &dep.value_ptr.*.scope)) |ty| {
+                    if (p.findTypenameScoped(typename, &dep.value_ptr.*.scope)) |ty| {
                         mty = ty;
                         break;
                     }
@@ -548,8 +568,6 @@ pub fn Parser(comptime ErrWriter: type) type {
                         // } else if (file.syntax == .proto2 and field.labels.count() == 0) {
                         //     return parser.fail("missing field label. proto2 syntax requires all fields have a label preceding the name - either 'optional', 'required' or 'repeated'", .{}, field.tokens[0], file);
                         // }
-
-                        // try message_node.fields.append(parser.arena, .{ .f = field });
                     },
                     .r_brace => {
                         // message_node.loc.end = pos;
@@ -606,7 +624,7 @@ pub fn Parser(comptime ErrWriter: type) type {
             }
         }
 
-        fn parseProtoFieldType(parser: *Self, typename: []const u8) !?FieldDescriptorProto.Type {
+        fn parseFieldType(parser: *Self, typename: []const u8) !?FieldDescriptorProto.Type {
             const prefix = "TYPE_";
             const len = prefix.len + typename.len;
             try parser.tmp_buf.ensureTotalCapacity(parser.arena, len);
@@ -640,7 +658,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                 _ = file.token_it.next();
             }
             const typename = tokenIdContent(typenameid, file);
-            if (try parser.parseProtoFieldType(typename)) |ty|
+            if (try parser.parseFieldType(typename)) |ty|
                 field.set(.type, ty)
             else {
                 // const field_tyname = try std.fmt.allocPrint(parser.arena, ".{s}", .{typename});
@@ -654,14 +672,14 @@ pub fn Parser(comptime ErrWriter: type) type {
                 const valtid = try parser.expectTokenIn(&.{ .identifier, .identifier_dotted }, file);
                 _ = try parser.expectToken(.gt, file);
                 field.set(.label, .LABEL_REPEATED);
-                field.set(.type, .TYPE_ERROR);
+                field.set(.type, .TYPE_MESSAGE);
                 const keytyname = tokenIdContent(keytid, file);
-                const keyty = if (try parser.parseProtoFieldType(keytyname)) |ty|
+                const keyty = if (try parser.parseFieldType(keytyname)) |ty|
                     ty
                 else
                     return parser.fail("invalid key type '{s}'", .{keytyname}, keytid, file);
                 const valtyname = tokenIdContent(valtid, file);
-                const valty = try parser.parseProtoFieldType(valtyname);
+                const valty = try parser.parseFieldType(valtyname);
                 const valtyname0 = if (valty) |ty| @tagName(ty)[5..] else valtyname;
                 const mapent_tyname = try std.fmt.allocPrint(parser.arena, "Map{s}{s}Entry", .{ @tagName(keyty)[5..], valtyname0 });
                 const field_tyname = try std.fmt.allocPrint(parser.arena, ".{s}.{s}", .{ parent_message.name, mapent_tyname });
@@ -697,15 +715,13 @@ pub fn Parser(comptime ErrWriter: type) type {
                 if (valty) |ty| {
                     vfield.set(.type, ty);
                 } else {
-                    const mty = parser.findTypename(valtyname, parent_message) catch null;
-                    const ty = if (mty) |ty|
-                        ty
-                    else ty: {
-                        try parser.unresolved_types.put(parser.arena, valtyname, .{ .scope = scope, .field = field });
-                        break :ty .TYPE_ERROR;
-                    };
-                    vfield.set(.type, ty);
-                    vfield.set(.type_name, valtyname);
+                    try parser.findAndSetFieldType(
+                        valtyname,
+                        vfield,
+                        scope,
+                        file,
+                    );
+                    vfield.set(.type_name, typename);
                 }
                 parent_message.setPresent(.nested_type);
             }
@@ -756,6 +772,21 @@ pub fn Parser(comptime ErrWriter: type) type {
                 field.set(.options, options);
             }
             _ = try parser.expectToken(.semicolon, file);
+
+            if (!field.has(.type) or field.type == .TYPE_ERROR)
+                try parser.unresolved_types.put(parser.arena, field.type_name, .{ .scope = scope, .field = field });
+        }
+
+        inline fn findAndSetFieldType(
+            parser: *Self,
+            typename: []const u8,
+            field: *FieldDescriptorProto,
+            scope: *const Scope,
+            file: *const File,
+        ) !void {
+            if (parser.findTypename(typename, scope, file) catch null) |ty| {
+                field.set(.type, ty);
+            }
         }
 
         // fn parseRanges(parser: *Self, range_list: *RangeList, file: *File) Error!void {

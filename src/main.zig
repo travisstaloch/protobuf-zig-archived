@@ -6,6 +6,8 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const clap = @import("deps/zig-clap/clap.zig");
 const protozig = @import("lib.zig");
+const util = @import("util.zig");
+pub const log_level = util.log_level;
 
 fn fatal(allocator: Allocator, comptime format: []const u8, args: anytype) noreturn {
     exit: {
