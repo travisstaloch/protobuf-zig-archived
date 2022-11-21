@@ -51,7 +51,7 @@ pub fn parseToCodeGenReq(
 ) !CodeGeneratorRequest {
     const proto_file = std.fs.cwd().openFile(std.mem.span(protopath), .{}) catch |e| switch (e) {
         error.FileNotFound => {
-            std.debug.print("file '{s}' not found\n", .{protopath});
+            std.log.err("file '{s}' not found", .{protopath});
             return e;
         },
         else => return e,

@@ -81,7 +81,7 @@ pub fn main() !void {
         var out = std.ArrayList(u8).init(allr);
         defer out.deinit();
         _ = proto_type;
-        std.debug.print("TODO decode\n", .{});
+        std.log.err("TODO decode\n", .{});
         return error.Todo;
         // const decoderes = try protozig.decodeToWriter(
         //     allr,

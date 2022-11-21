@@ -89,7 +89,6 @@ pub fn Parser(comptime ErrWriter: type) type {
             std.mem.reverse(FileDescriptorProto, p.req.proto_file.items);
             var iter = p.unresolved_types.iterator();
             while (iter.next()) |ent| {
-                //     std.debug.print("{s}\n", .{ent.key_ptr.*});
                 const typename = ent.key_ptr.*;
                 const scoped_field = ent.value_ptr.*;
                 try p.fixupFieldTypes(typename, scoped_field);

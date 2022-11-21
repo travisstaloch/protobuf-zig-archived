@@ -8,6 +8,8 @@ const types = @import("types.zig");
 const gen_json = @import("gen-json.zig");
 const plugin = types.plugin;
 const CodeGeneratorRequest = plugin.CodeGeneratorRequest;
+const util = @import("util.zig");
+pub const log_level = util.log_level;
 
 fn usage(basename: []const u8) void {
     std.debug.print("Usage: {s} <?include-path> <proto-path>\n", .{basename});
@@ -55,8 +57,8 @@ pub fn main() !void {
             .allocator = allr,
             .env_map = &env_map,
         });
-        std.debug.print("protoc-zig stderr {s}\n", .{res.stderr});
-        std.debug.print("protoc-zig stdout {s}\n", .{std.fmt.fmtSliceHexLower(res.stdout)});
+        std.log.debug("protoc-zig stderr {s}", .{res.stderr});
+        std.log.debug("protoc-zig stdout {s}", .{std.fmt.fmtSliceHexLower(res.stdout)});
         break :blk res.stdout;
     };
 
@@ -74,17 +76,19 @@ pub fn main() !void {
         break :blk req;
     };
 
-    const stdout = std.io.getStdOut().writer();
-    try gen_json.writeJson(protoc_req, stdout);
-    _ = try stdout.write("\n\n");
-    try gen_json.writeJson(zig_protoc_req, stdout);
-    _ = try stdout.write("\n\n");
+    if (log_level == .debug) {
+        const stdout = std.io.getStdOut().writer();
+        try gen_json.writeJson(protoc_req, stdout);
+        _ = try stdout.write("\n\n");
+        try gen_json.writeJson(zig_protoc_req, stdout);
+        _ = try stdout.write("\n\n");
+    }
 
     var buf: [256]u8 = undefined;
     var err = std.ArrayList(u8).init(allr);
     try compare(protoc_req, zig_protoc_req, err.writer(), 0, "", &buf);
     if (err.items.len > 0) {
-        std.debug.print("ERROR:\n{s}\n", .{err.items});
+        std.log.err("\n{s}\n", .{err.items});
         return error.DifferingCodeGenRequests;
     }
 }

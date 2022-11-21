@@ -151,7 +151,7 @@ pub fn readFieldKey(reader: anytype) !Key {
 
     return Key{
         .wire_type = std.meta.intToEnum(WireType, key & 0b111) catch {
-            std.debug.print("error: readFieldKey() invalid wire_type {}. key {}:0x{x}:0b{b:0>8} field_num {}\n", .{ @truncate(u3, key), key, key, key, key >> 3 });
+            std.log.err("readFieldKey() invalid wire_type {}. key {}:0x{x}:0b{b:0>8} field_num {}", .{ @truncate(u3, key), key, key, key, key >> 3 });
             return error.InvalidKey;
         },
         .field_num = key >> 3,
@@ -266,11 +266,11 @@ const LogLevel = std.log.Level;
 pub const Label = enum { nolabel, optional, required, repeated };
 
 fn failDecoding(comptime fmt: []const u8, args: anytype) Error {
-    std.debug.print(fmt, args);
+    std.log.err(fmt, args);
     return error.DecodingError;
 }
 fn failEncoding(comptime fmt: []const u8, args: anytype) Error {
-    std.debug.print(fmt, args);
+    std.log.err(fmt, args);
     return error.EncodingError;
 }
 
@@ -349,7 +349,7 @@ pub fn serialize(
 
     if (log_level == .debug) {
         const packedmsg = if (is_packed) "packed" else "notpacked";
-        std.debug.print("serialize {} {s}: {s} - {s}/{s} .{s} {s}\n", .{ field_num, field_name, @typeName(T), @tagName(wire_type), @tagName(binary_type), @tagName(label), packedmsg });
+        std.log.debug("serialize {} {s}: {s} - {s}/{s} .{s} {s}", .{ field_num, field_name, @typeName(T), @tagName(wire_type), @tagName(binary_type), @tagName(label), packedmsg });
     }
     _ = field;
     _ = writer;
