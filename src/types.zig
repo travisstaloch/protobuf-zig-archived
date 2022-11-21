@@ -3,6 +3,7 @@ const decoding = @import("decoding.zig");
 pub const descriptor = @import("gen/examples/google/protobuf/descriptor.proto.zig");
 pub const plugin = @import("gen/examples/google/protobuf/compiler/plugin.proto.zig");
 const FileDescriptorProto = descriptor.FileDescriptorProto;
+const FieldDescriptorProto = descriptor.FieldDescriptorProto;
 pub const Token = struct {
     id: Id,
     loc: Loc,
@@ -121,18 +122,63 @@ pub const Error = error{
     std.fmt.BufPrintError ||
     std.os.RealPathError;
 
+pub const Scope = struct {
+    parent: ?*const Scope,
+    file: *File,
+    node: Node,
+
+    pub const Node = union(enum) {
+        file: *const descriptor.FileDescriptorProto,
+        message: *const descriptor.DescriptorProto,
+        enum_: *const descriptor.EnumDescriptorProto,
+
+        pub fn name(n: Node) []const u8 {
+            return switch (n) {
+                .file => n.file.name,
+                .message => n.message.name,
+                .enum_ => n.enum_.name,
+            };
+        }
+    };
+    // const NodeList = std.ArrayListUnmanaged(*const Node);
+
+    pub fn init(
+        parent: ?*const Scope,
+        file: *File,
+        node: Node,
+    ) Scope {
+        return .{
+            .parent = parent,
+            .file = file,
+            .node = node,
+        };
+    }
+};
+
+pub const ScopedField = struct {
+    scope: *const Scope,
+    field: *FieldDescriptorProto,
+};
+
 pub const File = struct {
     source: ?[*:0]const u8,
     path: [*:0]const u8,
     token_it: TokenIterator,
     descriptor: *FileDescriptorProto,
     syntax: Syntax = .proto2,
+    scope: Scope,
 
     pub const Syntax = enum { proto2, proto3 };
     pub const ImportType = enum { import, root };
 
     pub fn init(source: ?[*:0]const u8, path: [*:0]const u8, descr: *FileDescriptorProto) File {
-        return .{ .source = source, .path = path, .descriptor = descr, .token_it = .{ .tokens = &.{} } };
+        return .{
+            .source = source,
+            .path = path,
+            .descriptor = descr,
+            .token_it = .{ .tokens = &.{} },
+            .scope = undefined,
+        };
     }
 };
 
