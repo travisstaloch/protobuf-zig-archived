@@ -254,6 +254,13 @@ pub fn isArrayList(comptime T: type) bool {
         comptime std.mem.indexOf(u8, @typeName(T), "ArrayList") != null;
 }
 
+pub fn isSegmentedList(comptime T: type) bool {
+    return @typeInfo(T) == .Struct and
+        @hasField(T, "prealloc_segment") and
+        @hasField(T, "dynamic_segments") and
+        comptime std.mem.indexOf(u8, @typeName(T), "SegmentedList") != null;
+}
+
 pub fn isHashMap(comptime T: type) bool {
     return @typeInfo(T) == .Struct and
         @hasDecl(T, "get") and

@@ -132,12 +132,10 @@ pub const Scope = struct {
     node: Node,
 
     pub const Node = union(enum) {
-        file: ListIdx,
-        message: ListIdx,
-        enum_: ListIdx,
+        file: *FileDescriptorProto,
+        message: *DescriptorProto,
+        enum_: *EnumDescriptorProto,
 
-        pub const ListIdx = struct { list: *align(8) anyopaque, idx: usize };
-        pub const List = std.ArrayListUnmanaged;
         pub const Tag = std.meta.Tag(Node);
         pub fn TagItem(comptime tag: Tag) type {
             return switch (tag) {
@@ -146,25 +144,18 @@ pub const Scope = struct {
                 .enum_ => EnumDescriptorProto,
             };
         }
-        pub fn init(comptime tag: Tag, list: *List(TagItem(tag)), idx: usize) Node {
+        pub fn init(comptime tag: Tag, item: *TagItem(tag)) Node {
             return comptime switch (tag) {
-                .file => .{ .file = .{ .list = @ptrCast(*List(FileDescriptorProto), list), .idx = idx } },
-                .message => .{ .message = .{ .list = @ptrCast(*List(DescriptorProto), list), .idx = idx } },
-                .enum_ => .{ .enum_ = .{ .list = @ptrCast(*List(EnumDescriptorProto), list), .idx = idx } },
-            };
-        }
-        pub fn item(n: Node, comptime tag: Tag) *TagItem(tag) {
-            return &switch (tag) {
-                .file => @ptrCast(*List(FileDescriptorProto), n.file.list).items[n.file.idx],
-                .message => @ptrCast(*List(DescriptorProto), n.message.list).items[n.message.idx],
-                .enum_ => @ptrCast(*List(EnumDescriptorProto), n.enum_.list).items[n.enum_.idx],
+                .file => .{ .file = item },
+                .message => .{ .message = item },
+                .enum_ => .{ .enum_ = item },
             };
         }
         pub fn name(n: Node) []const u8 {
             return switch (n) {
-                .file => n.item(.file).name,
-                .message => n.item(.message).name,
-                .enum_ => n.item(.enum_).name,
+                .file => n.file.name,
+                .message => n.message.name,
+                .enum_ => n.enum_.name,
             };
         }
     };
@@ -180,19 +171,14 @@ pub const Scope = struct {
 
 pub const ScopedField = struct {
     scope: *const Scope,
-    list: *std.ArrayListUnmanaged(FieldDescriptorProto),
-    idx: usize,
-
-    pub fn field(sf: ScopedField) *FieldDescriptorProto {
-        return &sf.list.items[sf.idx];
-    }
+    field: *FieldDescriptorProto,
 };
 
 pub const File = struct {
     source: ?[*:0]const u8,
     path: [*:0]const u8,
     token_it: TokenIterator,
-    descriptor: Scope.Node,
+    descriptor: *FileDescriptorProto,
     syntax: Syntax = .proto2,
     scope: Scope,
 
@@ -212,6 +198,10 @@ pub const File = struct {
         };
     }
 };
+
+pub fn List(comptime T: type) type {
+    return std.SegmentedList(T, 0);
+}
 
 /// represents a token within a file
 pub const Site = struct {
@@ -238,18 +228,6 @@ pub const Loc = struct {
     start: u32,
     end: u32,
 };
-
-pub const EnumNode = struct {
-    loc: Loc,
-    name: TokenIndex,
-    fields: std.ArrayListUnmanaged(Field) = .{},
-    options: std.ArrayListUnmanaged([2]TokenIndex) = .{},
-
-    pub const Field = [2]TokenIndex; // name, value
-};
-
-pub const Range = struct { start: TokenIndex, end: ?TokenIndex };
-pub const RangeList = std.ArrayListUnmanaged(Range);
 
 pub const ErrorMsg = struct {
     msg: []const u8,
