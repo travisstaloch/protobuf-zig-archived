@@ -18,6 +18,10 @@ pub fn writeJson(value: anytype, writer: anytype) ErrOf(@TypeOf(writer), "write"
         .Bool => try writer.print("{}", .{value}),
         .Struct => if (comptime decoding.isArrayList(T)) {
             try writeJson(value.items, writer);
+        } else if (comptime decoding.isSegmentedList(T)) {
+            var iter = value.constIterator(0);
+            while (iter.next()) |it|
+                try writeJson(it, writer);
         } else if (comptime decoding.isHashMap(T)) {
             var iter = value.iterator();
             _ = try writer.write("[");
