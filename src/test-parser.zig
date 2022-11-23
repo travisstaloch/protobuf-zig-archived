@@ -93,7 +93,23 @@ pub fn main() !void {
     }
 }
 
-const CmpErr = error{ Diff, OutOfMemory, AccessDenied, BrokenPipe, ConnectionResetByPeer, DiskQuota, FileTooBig, InputOutput, LockViolation, NoSpaceLeft, NotOpenForWriting, OperationAborted, SystemResources, Unexpected, WouldBlock };
+const CmpErr = error{
+    Diff,
+    OutOfMemory,
+    AccessDenied,
+    BrokenPipe,
+    ConnectionResetByPeer,
+    DiskQuota,
+    FileTooBig,
+    InputOutput,
+    LockViolation,
+    NoSpaceLeft,
+    NotOpenForWriting,
+    OperationAborted,
+    SystemResources,
+    Unexpected,
+    WouldBlock,
+};
 
 fn Fmt(comptime T: type) type {
     return struct {

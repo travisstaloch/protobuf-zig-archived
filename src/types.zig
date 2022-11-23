@@ -4,6 +4,10 @@ pub const descriptor = @import("gen/examples/google/protobuf/descriptor.proto.zi
 pub const plugin = @import("gen/examples/google/protobuf/compiler/plugin.proto.zig");
 const FileDescriptorProto = descriptor.FileDescriptorProto;
 const FieldDescriptorProto = descriptor.FieldDescriptorProto;
+const DescriptorProto = descriptor.DescriptorProto;
+const EnumDescriptorProto = descriptor.EnumDescriptorProto;
+const OneofDescriptorProto = descriptor.OneofDescriptorProto;
+
 pub const Token = struct {
     id: Id,
     loc: Loc,
@@ -128,25 +132,44 @@ pub const Scope = struct {
     node: Node,
 
     pub const Node = union(enum) {
-        file: *const descriptor.FileDescriptorProto,
-        message: *const descriptor.DescriptorProto,
-        enum_: *const descriptor.EnumDescriptorProto,
+        file: ListIdx,
+        message: ListIdx,
+        enum_: ListIdx,
 
+        pub const ListIdx = struct { list: *align(8) anyopaque, idx: usize };
+        pub const List = std.ArrayListUnmanaged;
+        pub const Tag = std.meta.Tag(Node);
+        pub fn TagItem(comptime tag: Tag) type {
+            return switch (tag) {
+                .file => FileDescriptorProto,
+                .message => DescriptorProto,
+                .enum_ => EnumDescriptorProto,
+            };
+        }
+        pub fn init(comptime tag: Tag, list: *List(TagItem(tag)), idx: usize) Node {
+            return comptime switch (tag) {
+                .file => .{ .file = .{ .list = @ptrCast(*List(FileDescriptorProto), list), .idx = idx } },
+                .message => .{ .message = .{ .list = @ptrCast(*List(DescriptorProto), list), .idx = idx } },
+                .enum_ => .{ .enum_ = .{ .list = @ptrCast(*List(EnumDescriptorProto), list), .idx = idx } },
+            };
+        }
+        pub fn item(n: Node, comptime tag: Tag) *TagItem(tag) {
+            return &switch (tag) {
+                .file => @ptrCast(*List(FileDescriptorProto), n.file.list).items[n.file.idx],
+                .message => @ptrCast(*List(DescriptorProto), n.message.list).items[n.message.idx],
+                .enum_ => @ptrCast(*List(EnumDescriptorProto), n.enum_.list).items[n.enum_.idx],
+            };
+        }
         pub fn name(n: Node) []const u8 {
             return switch (n) {
-                .file => n.file.name,
-                .message => n.message.name,
-                .enum_ => n.enum_.name,
+                .file => n.item(.file).name,
+                .message => n.item(.message).name,
+                .enum_ => n.item(.enum_).name,
             };
         }
     };
-    // const NodeList = std.ArrayListUnmanaged(*const Node);
 
-    pub fn init(
-        parent: ?*const Scope,
-        file: *File,
-        node: Node,
-    ) Scope {
+    pub fn init(parent: ?*const Scope, file: *File, node: Node) Scope {
         return .{
             .parent = parent,
             .file = file,
@@ -157,25 +180,33 @@ pub const Scope = struct {
 
 pub const ScopedField = struct {
     scope: *const Scope,
-    field: *FieldDescriptorProto,
+    list: *std.ArrayListUnmanaged(FieldDescriptorProto),
+    idx: usize,
+
+    pub fn field(sf: ScopedField) *FieldDescriptorProto {
+        return &sf.list.items[sf.idx];
+    }
 };
 
 pub const File = struct {
     source: ?[*:0]const u8,
     path: [*:0]const u8,
     token_it: TokenIterator,
-    descriptor: *FileDescriptorProto,
+    descriptor: Scope.Node,
     syntax: Syntax = .proto2,
     scope: Scope,
 
     pub const Syntax = enum { proto2, proto3 };
     pub const ImportType = enum { import, root };
 
-    pub fn init(source: ?[*:0]const u8, path: [*:0]const u8, descr: *FileDescriptorProto) File {
+    pub fn init(
+        source: ?[*:0]const u8,
+        path: [*:0]const u8,
+    ) File {
         return .{
             .source = source,
             .path = path,
-            .descriptor = descr,
+            .descriptor = undefined,
             .token_it = .{ .tokens = &.{} },
             .scope = undefined,
         };
