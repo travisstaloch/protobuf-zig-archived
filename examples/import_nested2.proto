@@ -1,0 +1,5 @@
+syntax = "proto3";
+import "all_types.proto";
+message Test {
+  All.NestedEnum nested_enum = 73;
+}

@@ -300,6 +300,7 @@ pub fn Parser(comptime ErrWriter: type) type {
         fn matchTypename(typename: []const u8, node: Scope.Node, pkg: []const u8) Match {
             const name = node.name();
             std.log.debug("matchTypename({s}) name {s} pkg {s}", .{ typename, name, pkg });
+            if (typename.len == 0) return .full;
             if (std.mem.endsWith(u8, name, typename)) {
                 var rest = name[0 .. name.len - typename.len];
                 if (rest.len == 0) return .full;
@@ -318,7 +319,29 @@ pub fn Parser(comptime ErrWriter: type) type {
             return .none;
         }
 
-        fn findTypenameNode(p: *Self, typename: []const u8, node: Scope.Node, pkg: []const u8, path: []const u8) Allocator.Error!?NodeAndType {
+        fn handleMatch(match: Match, ty: FieldDescriptorProto.Type, node: Scope.Node, path: []const u8) ?NodeAndType {
+            switch (match) {
+                .full => return NodeAndType.init(ty, node),
+                .none => {},
+                .partial => |part| {
+                    // this allows for matching nested local typenames such as:
+                    //  message A {
+                    //      message B {}
+                    //      B b = 0;
+                    //  }
+                    std.log.debug("  part '{s}' path '{s}'", .{ part, path });
+                    if (std.mem.eql(
+                        u8,
+                        std.mem.trim(u8, path, "."),
+                        std.mem.trim(u8, part, "."),
+                    ))
+                        return NodeAndType.init(ty, node);
+                },
+            }
+            return null;
+        }
+
+        fn findTypenameNode(p: *Self, typename: []const u8, node: Scope.Node, pkg: []const u8, path: []const u8) ?NodeAndType {
             std.log.debug("findTypenameNode({s}, .{s} = {s}) path {s}", .{ typename, @tagName(node), node.name(), path });
 
             blk: {
@@ -327,20 +350,8 @@ pub fn Parser(comptime ErrWriter: type) type {
                     .enum_ => .TYPE_ENUM,
                     .file => break :blk,
                 };
-                switch (matchTypename(typename, node, pkg)) {
-                    .full => return NodeAndType.init(ty, node),
-                    .none => {},
-                    .partial => |part| {
-                        // this allows for matching nested local typenames such as:
-                        //  message A {
-                        //      message B {}
-                        //      B b = 0;
-                        //  }
-                        std.log.debug("  part {s} path {s}", .{ part, path });
-                        if (std.mem.endsWith(u8, path, part))
-                            return NodeAndType.init(ty, node);
-                    },
-                }
+                if (handleMatch(matchTypename(typename, node, pkg), ty, node, path)) |nt|
+                    return nt;
             }
 
             switch (node) {
@@ -350,7 +361,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         var iter = fd.enum_type.iterator(0);
                         while (iter.next()) |it| {
                             const node2 = Scope.Node.init(.enum_, it);
-                            if (try p.findTypenameNode(typename, node2, pkg, path)) |nt|
+                            if (p.findTypenameNode(typename, node2, pkg, path)) |nt|
                                 return nt;
                         }
                     }
@@ -359,7 +370,11 @@ pub fn Parser(comptime ErrWriter: type) type {
                         var iter = fd.message_type.iterator(0);
                         while (iter.next()) |it| {
                             const node2 = Scope.Node.init(.message, it);
-                            if (try p.findTypenameNode(typename, node2, pkg, path)) |nt|
+                            const typenameadj = if (std.mem.startsWith(u8, typename, it.name))
+                                typename[it.name.len..]
+                            else
+                                typename;
+                            if (p.findTypenameNode(typenameadj, node2, pkg, path)) |nt|
                                 return nt;
                         }
                     }
@@ -369,21 +384,21 @@ pub fn Parser(comptime ErrWriter: type) type {
                         var iter = m.enum_type.iterator(0);
                         while (iter.next()) |it| {
                             const node2 = Scope.Node.init(.enum_, it);
-                            if (matchTypename(typename, node2, pkg) == .full)
-                                return NodeAndType.init(.TYPE_ENUM, node);
+                            if (handleMatch(matchTypename(typename, node2, pkg), .TYPE_ENUM, node2, path)) |nt|
+                                return nt;
                         }
                     }
                     {
                         var iter = m.nested_type.iterator(0);
                         while (iter.next()) |it| {
                             const node2 = Scope.Node.init(.message, it);
-                            if (try p.findTypenameNode(typename, node2, pkg, m.name)) |nty|
-                                return nty;
+                            if (p.findTypenameNode(typename, node2, pkg, m.name)) |nt|
+                                return nt;
                         }
                     }
                 },
-                .enum_ => if (matchTypename(typename, node, pkg) == .full)
-                    return NodeAndType.init(.TYPE_ENUM, node),
+                .enum_ => if (handleMatch(matchTypename(typename, node, pkg), .TYPE_ENUM, node, path)) |nt|
+                    return nt,
             }
             return null;
         }
@@ -406,11 +421,12 @@ pub fn Parser(comptime ErrWriter: type) type {
             while (depsiter.next()) |ent| {
                 const file = ent.value_ptr.*;
                 const node = Scope.Node.init(.file, file.descriptor);
-                if (try parser.findTypenameNode(typename, node, file.descriptor.package, file.descriptor.package)) |nt|
+                if (parser.findTypenameNode(typename, node, file.descriptor.package, file.descriptor.package)) |nt|
                     return nt;
             }
             return null;
         }
+
         fn findTypename(
             parser: *Self,
             typename: []const u8,
@@ -441,6 +457,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                 try p.resolveFieldTypesInner(Scope.Node.init(.file, file.descriptor), file);
             }
         }
+
         fn resolveFieldTypesInner(p: *Self, node: Scope.Node, file: *File) Error!void {
             // TODO pos
             std.log.debug("resolveFieldTypesInner .{s} node.name {s}", .{ @tagName(node), node.name() });
@@ -456,6 +473,8 @@ pub fn Parser(comptime ErrWriter: type) type {
                         var fiter = m.field.iterator(0);
                         while (fiter.next()) |field| {
                             if (field.has(.type)) continue;
+                            std.log.debug("", .{});
+                            std.log.debug("", .{});
                             std.log.debug("field '{s}' with unresolved type '{s}'", .{ field.name, field.type_name });
                             if ((!field.has(.type_name) or field.type_name.len == 0))
                                 return p.fail("missing type name '{s}' for field '{s}'", .{ field.type_name, field.name }, 0, file);
