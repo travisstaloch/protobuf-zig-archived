@@ -123,6 +123,13 @@ fn Fmt(comptime T: type) type {
                         if (i != 0) _ = try writer.write(", ");
                         try writer.print("{}", .{fmt(it)});
                     }
+                } else if (comptime decoding.isSegmentedList(T)) {
+                    var iter = self.t.constIterator(0);
+                    var i: usize = 0;
+                    while (iter.next()) |it| {
+                        if (i != 0) _ = try writer.write(", ");
+                        try writer.print("{}", .{fmt(it)});
+                    }
                 } else inline for (std.meta.fields(T)) |f, i| {
                     if (i != 0) _ = try writer.write(", ");
                     var cw = std.io.countingWriter(std.io.null_writer);
@@ -181,6 +188,29 @@ fn compare(expected: anytype, actual: anytype, errwriter: anytype, depth: usize,
                     try compareprint("{s}: items[{}] differ expected {} actual <missing>\n", .{ field_name, i, fmt(exit) }, errwriter, depth);
                 } else if (i < actual.items.len) {
                     const actit = actual.items[i];
+                    try compareprint("{s}: items[{}] differ expected <missing> actual {}\n", .{ field_name, i, fmt(actit) }, errwriter, depth);
+                }
+            }
+        } else if (comptime decoding.isSegmentedList(E)) {
+            if (expected.len != actual.len) {
+                try compareprint("{s}: items.len differ expected {} got {}\n", .{ field_name, expected.len, actual.len }, errwriter, depth);
+            }
+            const maxlen = @max(expected.len, actual.len);
+            var i: usize = 0;
+            var iterex = expected.constIterator(0);
+            var iterac = expected.constIterator(0);
+            while (i < maxlen) : (i += 1) {
+                if (i < expected.len and i < actual.len) {
+                    const actit = iterac.next();
+                    const exit = iterex.next();
+                    compare(exit, actit, errwriter, depth + 1, field_name, buf) catch {
+                        try compareprint("{s}: items[{}] differ\n", .{ field_name, i }, errwriter, depth);
+                    };
+                } else if (i < expected.len) {
+                    const exit = iterex.next();
+                    try compareprint("{s}: items[{}] differ expected {} actual <missing>\n", .{ field_name, i, fmt(exit) }, errwriter, depth);
+                } else if (i < actual.len) {
+                    const actit = iterac.next();
                     try compareprint("{s}: items[{}] differ expected <missing> actual {}\n", .{ field_name, i, fmt(actit) }, errwriter, depth);
                 }
             }
