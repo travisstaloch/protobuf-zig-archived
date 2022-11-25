@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+import "only_oneof.proto";
+
+message A {
+  Value v = 0;
+}

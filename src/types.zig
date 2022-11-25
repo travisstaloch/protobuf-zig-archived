@@ -180,7 +180,6 @@ pub const File = struct {
     token_it: TokenIterator,
     descriptor: *FileDescriptorProto,
     syntax: Syntax = .proto2,
-    scope: Scope,
 
     pub const Syntax = enum { proto2, proto3 };
     pub const ImportType = enum { import, root };
@@ -194,12 +193,11 @@ pub const File = struct {
             .path = path,
             .descriptor = undefined,
             .token_it = .{ .tokens = &.{} },
-            .scope = undefined,
         };
     }
 };
 
-pub fn List(comptime T: type) type {
+pub fn SegmentedList(comptime T: type) type {
     return std.SegmentedList(T, 0);
 }
 

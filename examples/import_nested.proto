@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+import "nested_message.proto";
+
+message AA {
+  message BB {
+    message CC {
+      A.B.C c  = 1;
+    }
+  }
+}

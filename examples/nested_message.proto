@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+//package "apkg";
+
+message A {
+  message B  {
+    message C  {
+      D d = 1;
+    }
+    message D {
+      string d = 1;
+    }
+  }
+}

@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+message Value {
+  oneof kind {
+    string string_value = 1;
+    double number_value = 2;
+    bool bool_value = 4;
+    ListValue list_value = 6;
+  }
+}
+
+message ListValue {
+  repeated Value values = 1;
+}
