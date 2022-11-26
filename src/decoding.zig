@@ -519,3 +519,86 @@ pub fn debugFieldsPresent(__fields_present: anytype) void {
         std.debug.print("{b:0>64}\n", .{__fields_present.mask});
     }
 }
+
+pub const RepeatType = enum { segmented_list, array_list };
+
+pub fn ConstListIterator(comptime T: type) type {
+    return struct {
+        state: State,
+
+        const Self = @This();
+        const tinfo = @typeInfo(T);
+        const repeat_type: RepeatType = if (isArrayList(T))
+            .array_list
+        else if (isSegmentedList(T))
+            .segmented_list
+        else
+            @compileError("expecting T to be an ArrayList or SegmentedList but got '" ++ @typeName(T) ++ "'");
+
+        pub const State = switch (repeat_type) {
+            .array_list => struct {
+                list: T,
+                index: usize = 0,
+            },
+            .segmented_list => T.ConstIterator,
+        };
+
+        pub const Item = switch (repeat_type) {
+            .array_list => blk: {
+                const itemsinfo = std.meta.fieldInfo(T, .items);
+                break :blk @typeInfo(itemsinfo.field_type).Pointer.child;
+            },
+            .segmented_list => blk: {
+                const itemsinfo = std.meta.fieldInfo(T, .prealloc_segment);
+                break :blk @typeInfo(itemsinfo.field_type).Array.child;
+            },
+        };
+
+        pub inline fn init(list: T) Self {
+            return switch (repeat_type) {
+                .array_list => .{ .state = .{ .list = list } },
+                .segmented_list => .{ .state = list.constIterator(0) },
+            };
+        }
+
+        pub fn next(self: *Self) ?Item {
+            defer {
+                if (repeat_type == .array_list) self.state.index += 1;
+            }
+            return switch (repeat_type) {
+                .array_list => if (self.state.index < self.state.list.items.len)
+                    self.state.list.items[self.state.index]
+                else
+                    null,
+                .segmented_list => if (self.state.next()) |n| n.* else null,
+            };
+        }
+    };
+}
+
+pub inline fn constListIterator(list: anytype) ConstListIterator(@TypeOf(list)) {
+    return ConstListIterator(@TypeOf(list)).init(list);
+}
+
+test "listIterator" {
+    {
+        var l = std.ArrayList(u8).init(allr);
+        defer l.deinit();
+        try l.append(0);
+        var iter = constListIterator(l);
+        const n = iter.next();
+        try std.testing.expect(n != null);
+        try std.testing.expectEqual(@as(u8, 0), n.?);
+        try std.testing.expect(iter.next() == null);
+    }
+    {
+        var l: std.SegmentedList(u8, 0) = .{};
+        defer l.deinit(allr);
+        try l.append(allr, 0);
+        var iter = constListIterator(l);
+        const n = iter.next();
+        try std.testing.expect(n != null);
+        try std.testing.expectEqual(@as(u8, 0), n.?);
+        try std.testing.expect(iter.next() == null);
+    }
+}

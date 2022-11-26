@@ -55,7 +55,7 @@ option optimize_for = SPEED;
 // The protocol compiler can output a FileDescriptorSet containing the .proto
 // files it parses.
 message FileDescriptorSet {
-  repeated FileDescriptorProto file = 1;
+  repeated FileDescriptorProto file = 1 [repeat_type = segmented_list];
 }
 
 // Describes a complete .proto file.
@@ -72,8 +72,8 @@ message FileDescriptorProto {
   repeated int32 weak_dependency = 11;
 
   // All top-level definitions in this file.
-  repeated DescriptorProto message_type = 4;
-  repeated EnumDescriptorProto enum_type = 5;
+  repeated DescriptorProto message_type = 4  [repeat_type = segmented_list];
+  repeated EnumDescriptorProto enum_type = 5  [repeat_type = segmented_list];
   repeated ServiceDescriptorProto service = 6;
   repeated FieldDescriptorProto extension = 7;
 
@@ -112,8 +112,8 @@ message DescriptorProto {
   repeated FieldDescriptorProto field = 2;
   repeated FieldDescriptorProto extension = 6;
 
-  repeated DescriptorProto nested_type = 3;
-  repeated EnumDescriptorProto enum_type = 4;
+  repeated DescriptorProto nested_type = 3  [repeat_type = segmented_list];
+  repeated EnumDescriptorProto enum_type = 4  [repeat_type = segmented_list];
 
   message ExtensionRange {
     int32 start = 1;  // Inclusive.

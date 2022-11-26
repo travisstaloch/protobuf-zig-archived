@@ -167,7 +167,7 @@ pub fn Parser(comptime ErrWriter: type) type {
 
                         const matched = try parser.parseOptions(
                             descriptor.FileOptions,
-                            descriptor.FileOptions.FileOptionsFieldEnum,
+                            descriptor.FileOptions.FieldEnum,
                             optname,
                             nameid,
                             options,
@@ -260,7 +260,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                 if (!try parser.parseUninterpretedOption(
                     optname,
                     nameid,
-                    std.meta.Child(@TypeOf(options.uninterpreted_option.prealloc_segment)),
+                    std.meta.Child(@TypeOf(options.uninterpreted_option.items.ptr)),
                     &options.uninterpreted_option,
                     contentid,
                     file,
@@ -469,21 +469,18 @@ pub fn Parser(comptime ErrWriter: type) type {
                     }
                 },
                 .message => |m| {
-                    {
-                        var fiter = m.field.iterator(0);
-                        while (fiter.next()) |field| {
-                            if (field.has(.type)) continue;
-                            std.log.debug("", .{});
-                            std.log.debug("", .{});
-                            std.log.debug("field '{s}' with unresolved type '{s}'", .{ field.name, field.type_name });
-                            if ((!field.has(.type_name) or field.type_name.len == 0))
-                                return p.fail("missing type name '{s}' for field '{s}'", .{ field.type_name, field.name }, 0, file);
-                            const ty = try p.findTypename(field.type_name, file) orelse
-                                return p.fail("type name '{s}' not found for field '{s}'", .{ field.type_name, field.name }, 0, file);
-                            if (!(ty == .TYPE_MESSAGE or ty == .TYPE_ENUM))
-                                return p.fail("internal error: unexpected type {s} for field '{s}'", .{ @tagName(ty), field.name }, 0, file);
-                            field.set(.type, ty);
-                        }
+                    for (m.field.items) |*field| {
+                        if (field.has(.type)) continue;
+                        std.log.debug("", .{});
+                        std.log.debug("", .{});
+                        std.log.debug("field '{s}' with unresolved type '{s}'", .{ field.name, field.type_name });
+                        if ((!field.has(.type_name) or field.type_name.len == 0))
+                            return p.fail("missing type name '{s}' for field '{s}'", .{ field.type_name, field.name }, 0, file);
+                        const ty = try p.findTypename(field.type_name, file) orelse
+                            return p.fail("type name '{s}' not found for field '{s}'", .{ field.type_name, field.name }, 0, file);
+                        if (!(ty == .TYPE_MESSAGE or ty == .TYPE_ENUM))
+                            return p.fail("internal error: unexpected type {s} for field '{s}'", .{ @tagName(ty), field.name }, 0, file);
+                        field.set(.type, ty);
                     }
                     {
                         var miter = m.nested_type.iterator(0);
@@ -601,7 +598,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         const field_value = try parser.expectToken(.int_literal, file);
                         _ = try parser.expectToken(.semicolon, file);
                         // for proto3, verify that the first field has value 0
-                        if (file.syntax == .proto3 and enum_node.value.len == 0) {
+                        if (file.syntax == .proto3 and enum_node.value.items.len == 0) {
                             const val_str = tokenIdContent(field_value, file);
                             const val = try std.fmt.parseInt(i32, val_str, 10);
                             if (val != 0) return parser.fail("proto3, the first enum field must have value 0. found {s}", .{val_str}, field_value, file);
@@ -716,7 +713,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         message_node.setPresent(.nested_type);
                     },
                     .keyword_oneof => {
-                        const oneof_id = message_node.oneof_decl.len;
+                        const oneof_id = message_node.oneof_decl.items.len;
                         const oneof = try message_node.oneof_decl.addOne(parser.arena);
                         oneof.* = .{};
                         message_node.setPresent(.oneof_decl);
@@ -878,7 +875,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                 const optname = tokenIdContent(optnameid, file);
                 const matched = try parser.parseOptions(
                     descriptor.FieldOptions,
-                    descriptor.FieldOptions.FieldOptionsFieldEnum,
+                    descriptor.FieldOptions.FieldEnum,
                     optname,
                     optnameid,
                     options,
@@ -897,7 +894,7 @@ pub fn Parser(comptime ErrWriter: type) type {
         fn parseRanges(
             parser: *Self,
             comptime Child: type,
-            range_list: *SegmentedList(Child),
+            range_list: *std.ArrayListUnmanaged(Child),
             file: *File,
         ) Error!void {
             while (true) {
