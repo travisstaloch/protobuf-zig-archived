@@ -167,7 +167,6 @@ pub fn Parser(comptime ErrWriter: type) type {
 
                         const matched = try parser.parseOptions(
                             descriptor.FileOptions,
-                            descriptor.FileOptions.FieldEnum,
                             optname,
                             nameid,
                             options,
@@ -202,11 +201,9 @@ pub fn Parser(comptime ErrWriter: type) type {
         /// assumes '[' was previous
         /// used for parsing options of form '[ctype = CORD]'
         /// T: descriptor.FileOptions or FieldOptions
-        /// E: descriptor.FieldOptions.FieldOptionsFieldEnum
         fn parseOptions(
             parser: *Self,
             comptime T: type,
-            comptime E: type,
             optname: []const u8,
             nameid: TokenIndex,
             options: *T,
@@ -224,7 +221,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                 };
 
                 if (std.mem.eql(u8, f.name[0 .. last_uscore_idx + 1], optname)) {
-                    const fe = comptime std.meta.stringToEnum(E, f.name) orelse
+                    const fe = comptime std.meta.stringToEnum(T.FieldEnum, f.name) orelse
                         @compileError("enum value not found for field '" ++ f.name ++ "'");
                     const info = @typeInfo(f.field_type);
                     switch (info) {
@@ -635,7 +632,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         enum_node.set(.options, options);
                     },
 
-                    else => return parser.fail("unexpected token: {}", .{token.id}, pos, file),
+                    else => return parser.fail("unexpected token: '{}'", .{token.id}, pos, file),
                 }
             }
 
@@ -748,7 +745,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         _ = try parser.expectToken(.semicolon, file);
                     },
 
-                    else => return parser.fail("unexpected token: {}", .{token.id}, pos, file),
+                    else => return parser.fail("unexpected token: '{}'", .{token.id}, pos, file),
                 }
             }
         }
@@ -864,33 +861,36 @@ pub fn Parser(comptime ErrWriter: type) type {
                 // save field options like default/deprecated/packed/json_name
                 // TODO: [packed = true] can only be specified for repeated primitive fields
                 // TODO save option data/location
-                const optnameid = try parser.expectToken(.identifier, file);
-                _ = try parser.expectToken(.equal, file);
-                // TODO save option data/location
-                const optvalid = try parser.expectTokenIn(&.{.identifier}, file);
-                _ = try parser.expectToken(.r_sbrace, file);
+                while (true) {
+                    const optnameid = try parser.expectToken(.identifier, file);
+                    _ = try parser.expectToken(.equal, file);
+                    // TODO save option data/location
+                    const optvalid = try parser.expectTokenIn(&.{.identifier}, file);
+                    const trailing_id = try parser.expectTokenIn(&.{ .r_sbrace, .comma }, file);
 
-                const options = if (field.options) |o| o else blk: {
-                    const o = try parser.arena.create(descriptor.FieldOptions);
-                    o.* = .{};
-                    break :blk o;
-                };
+                    const options = if (field.options) |o| o else blk: {
+                        const o = try parser.arena.create(descriptor.FieldOptions);
+                        o.* = .{};
+                        break :blk o;
+                    };
 
-                const optname = tokenIdContent(optnameid, file);
-                const matched = try parser.parseOptions(
-                    descriptor.FieldOptions,
-                    descriptor.FieldOptions.FieldEnum,
-                    optname,
-                    optnameid,
-                    options,
-                    optvalid,
-                    file,
-                );
+                    const optname = tokenIdContent(optnameid, file);
+                    const matched = try parser.parseOptions(
+                        descriptor.FieldOptions,
+                        optname,
+                        optnameid,
+                        options,
+                        optvalid,
+                        file,
+                    );
 
-                if (!matched)
-                    return parser.fail("failed to match field option {s}", .{optname}, nameid, file);
+                    if (!matched)
+                        return parser.fail("failed to match field option {s}", .{optname}, nameid, file);
 
-                field.set(.options, options);
+                    field.set(.options, options);
+                    const trailing = file.token_it.tokens[trailing_id];
+                    if (trailing.id == .r_sbrace) break;
+                }
             }
             _ = try parser.expectToken(.semicolon, file);
         }
@@ -947,7 +947,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                 return pos;
             } else {
                 file.token_it.seekTo(pos);
-                return parser.fail("unexpected token. expected {}, found {}", .{ id, token.id }, pos, file);
+                return parser.fail("unexpected token. expected '{}', found '{}'", .{ id, token.id }, pos, file);
             }
         }
 
@@ -959,7 +959,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                 return pos;
             } else {
                 file.token_it.seekTo(pos);
-                return parser.fail("unexpected token. expected one of {any}, found {}", .{ ids, token.id }, pos, file);
+                return parser.fail("unexpected token. expected one of {s}, found '{}'", .{ ids, token.id }, pos, file);
             }
         }
 
@@ -973,7 +973,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                     return pos;
             }
             file.token_it.seekTo(pos);
-            return parser.fail("unexpected token. expected {} with content '{s}', found {}", .{ id, content, token.id }, pos, file);
+            return parser.fail("unexpected token. expected '{}' with content '{s}', found '{}'", .{ id, content, token.id }, pos, file);
         }
     };
 }

@@ -72,6 +72,28 @@ pub const Token = struct {
         keyword_map,        // map<int32, int32> map_int32_int32 = 56;
 
         // zig fmt: on
+
+        pub fn toString(id: Id) []const u8 {
+            return switch (id) {
+                .l_brace => "{",
+                .r_brace => "}",
+                .l_sbrace => "[",
+                .r_sbrace => "]",
+                .l_paren => "(",
+                .r_paren => ")",
+                .dot => ".",
+                .comma => ",",
+                .semicolon => ";",
+                .equal => "=",
+                .lt => "<",
+                .gt => ">",
+                else => @tagName(id),
+            };
+        }
+
+        pub fn format(id: Id, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = try writer.write(id.toString());
+        }
     };
 };
 
