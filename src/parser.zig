@@ -297,29 +297,31 @@ pub fn Parser(comptime ErrWriter: type) type {
         }
 
         pub const Match = union(enum) { full, partial: []const u8, none };
-        fn matchTypename(typename: []const u8, node: Scope.Node, pkg: []const u8) Match {
+        fn matchTypename(
+            typename: []const u8,
+            node: Scope.Node,
+            pkg: []const u8,
+            ty: FieldDescriptorProto.Type,
+            path: []const u8,
+        ) ?NodeAndType {
             const name = node.name();
             std.log.debug("matchTypename({s}) name {s} pkg {s}", .{ typename, name, pkg });
-            if (typename.len == 0) return .full;
-            if (std.mem.endsWith(u8, name, typename)) {
+            const match: Match = if (typename.len == 0) .full else if (std.mem.endsWith(u8, name, typename)) blk: {
                 var rest = name[0 .. name.len - typename.len];
-                if (rest.len == 0) return .full;
-                if (rest[0] == '.' and std.mem.eql(u8, rest[1..], pkg)) return .full;
+                if (rest.len == 0) break :blk .full;
+                if (rest[0] == '.' and std.mem.eql(u8, rest[1..], pkg)) break :blk .full;
                 std.log.debug("rest {s}", .{rest});
-                return .{ .partial = rest };
-            } else if (std.mem.endsWith(u8, typename, name)) {
+                break :blk .{ .partial = rest };
+            } else if (std.mem.endsWith(u8, typename, name)) blk: {
                 var rest = typename[0 .. typename.len - name.len - 1];
                 std.log.debug("rest2 {s}", .{rest});
-                if (rest.len == 0) return .full;
+                if (rest.len == 0) break :blk .full;
                 if (rest.len == pkg.len + 2 and rest[0] == '.' and
                     std.mem.eql(u8, rest[1..], pkg))
-                    return .full;
-                return .{ .partial = rest[1..] };
-            }
-            return .none;
-        }
+                    break :blk .full;
+                break :blk .{ .partial = rest[1..] };
+            } else .none;
 
-        fn handleMatch(match: Match, ty: FieldDescriptorProto.Type, node: Scope.Node, path: []const u8) ?NodeAndType {
             switch (match) {
                 .full => return NodeAndType.init(ty, node),
                 .none => {},
@@ -350,7 +352,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                     .enum_ => .TYPE_ENUM,
                     .file => break :blk,
                 };
-                if (handleMatch(matchTypename(typename, node, pkg), ty, node, path)) |nt|
+                if (matchTypename(typename, node, pkg, ty, path)) |nt|
                     return nt;
             }
 
@@ -370,6 +372,8 @@ pub fn Parser(comptime ErrWriter: type) type {
                         var iter = fd.message_type.iterator(0);
                         while (iter.next()) |it| {
                             const node2 = Scope.Node.init(.message, it);
+                            if (p.findTypenameNode(typename, node2, pkg, path)) |nt|
+                                return nt;
                             const typenameadj = if (std.mem.startsWith(u8, typename, it.name))
                                 typename[it.name.len..]
                             else
@@ -384,7 +388,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         var iter = m.enum_type.iterator(0);
                         while (iter.next()) |it| {
                             const node2 = Scope.Node.init(.enum_, it);
-                            if (handleMatch(matchTypename(typename, node2, pkg), .TYPE_ENUM, node2, path)) |nt|
+                            if (matchTypename(typename, node2, pkg, .TYPE_ENUM, path)) |nt|
                                 return nt;
                         }
                     }
@@ -397,7 +401,7 @@ pub fn Parser(comptime ErrWriter: type) type {
                         }
                     }
                 },
-                .enum_ => if (handleMatch(matchTypename(typename, node, pkg), .TYPE_ENUM, node, path)) |nt|
+                .enum_ => if (matchTypename(typename, node, pkg, .TYPE_ENUM, path)) |nt|
                     return nt,
             }
             return null;
