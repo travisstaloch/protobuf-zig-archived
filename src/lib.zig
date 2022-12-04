@@ -6,9 +6,11 @@ const File = fs.File;
 const tokenizer = @import("tokenizer.zig");
 const parser = @import("parser.zig");
 const types = @import("types.zig");
+const util = @import("util.zig");
+const analysis = @import("analysis.zig");
 const plugin = types.plugin;
 const CodeGeneratorRequest = plugin.CodeGeneratorRequest;
-// const Result = types.Result(CodeGeneratorRequest);
+const todo = util.todo;
 
 pub fn writeErr(err_msg: types.ErrorMsg, writer: anytype) !void {
     // find the line and column of error
@@ -46,19 +48,37 @@ pub fn parseToCodeGenReq(
     source: [*:0]const u8,
     protopath: [*:0]const u8,
     include_paths: []const [:0]const u8,
-    writer: anytype,
     errwriter: anytype,
 ) !CodeGeneratorRequest {
-    const proto_file = std.fs.cwd().openFile(std.mem.span(protopath), .{}) catch |e| switch (e) {
-        error.FileNotFound => {
-            std.log.err("file '{s}' not found", .{protopath});
-            return e;
-        },
-        else => return e,
-    };
-    defer proto_file.close();
-
-    _ = writer;
     var pparser = parser.init(arena, protopath, source, include_paths, errwriter);
-    return pparser.parse();
+    const req = try pparser.parse();
+    var a = analysis.init(arena, req, pparser.deps_map, errwriter);
+    try a.resolveFieldTypes();
+    return req;
 }
+
+// pub fn serializeCodeGenReq(
+//     arena: Allocator,
+//     // req: plugin.CodeGeneratorRequest,
+//     prototype: [*:0]const u8,
+//     pparser: anytype,
+//     writer: anytype,
+//     errwriter: anytype,
+// ) !types.Result(void) {
+//     std.log.debug("serializeCodeGenReq prototype {s}", .{prototype});
+//     const ttypename: []const u8 = std.mem.span(prototype);
+//     if (ttypename.len == 0) return error.InvalidTypename;
+//     const typename = if (ttypename[0] == '.') ttypename else try std.fmt.allocPrint(arena, ".{s}", .{ttypename});
+
+//     var a = analysis.init(arena, pparser.req, pparser.deps_map, errwriter);
+//     try a.resolveFieldTypes();
+//     const mdescty = try a.findTypenameAbsoluteDescriptor(typename);
+//     const descty = mdescty orelse return error.InvalidTypename;
+//     encoding.serializeMessage(
+//         descty.descriptor,
+//         writer,
+//         errwriter,
+//     ) catch return .err;
+
+//     return .ok;
+// }

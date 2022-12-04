@@ -254,3 +254,105 @@ pub const ErrorMsg = struct {
     token: Token,
     file: *File,
 };
+
+pub const MessageDescriptor = struct {
+    // magic: u32,
+    name: []const u8,
+    // short_name: [*c]const u8,
+    // c_name: [*c]const u8,
+    // package_name: [*c]const u8,
+    // sizeof_message: usize,
+    // n_fields: c_uint,
+    fields: std.ArrayListUnmanaged(FieldDescriptor) = .{},
+    nested_type: std.ArrayListUnmanaged(MessageDescriptor) = .{},
+    enum_type: std.ArrayListUnmanaged(EnumDescriptor) = .{},
+    // fields_sorted_by_name: [*c]const c_uint,
+    // n_field_ranges: c_uint,
+    // field_ranges: [*c]const ProtobufCIntRange,
+    // message_init: ProtobufCMessageInit,
+    // reserved1: ?*anyopaque,
+    // reserved2: ?*anyopaque,
+    // reserved3: ?*anyopaque,
+};
+pub const FieldDescriptor = struct {
+    name: []const u8,
+    id: i32,
+    label: descriptor.FieldDescriptorProto.Label,
+    type: descriptor.FieldDescriptorProto.Type,
+    // quantifier_offset: c_uint,
+    offset: u32,
+    descriptor: ?Descriptor,
+    // oneof_index: ?u32,
+    // default_value: ?*const anyopaque,
+    flags: Flags,
+    // reserved_flags: c_uint,
+    // reserved2: ?*anyopaque,
+    // reserved3: ?*anyopaque,
+    pub const Flag = enum {
+        oneof,
+        packt,
+    };
+    pub const Flags = std.EnumSet(Flag);
+};
+pub const EnumDescriptor = struct {
+    // magic: u32,
+    name: []const u8,
+    // short_name: [*c]const u8,
+    // c_name: [*c]const u8,
+    // package_name: [*c]const u8,
+    // n_values: c_uint,
+    values: std.ArrayListUnmanaged(EnumValue) = .{},
+    // n_value_names: c_uint,
+    // values_by_name: [*c]const ProtobufCEnumValueIndex,
+    // n_value_ranges: c_uint,
+    // value_ranges: [*c]const ProtobufCIntRange,
+    // reserved1: ?*anyopaque,
+    // reserved2: ?*anyopaque,
+    // reserved3: ?*anyopaque,
+    // reserved4: ?*anyopaque,
+};
+
+pub const EnumValue = struct {
+    name: []const u8,
+    // c_name: [*c]const u8,
+    value: i32,
+};
+
+pub const FileDescriptor = struct {
+    name: []const u8,
+    package: []const u8,
+    message_type: std.ArrayListUnmanaged(MessageDescriptor) = .{},
+    enum_type: std.ArrayListUnmanaged(EnumDescriptor) = .{},
+};
+
+pub const Descriptor = extern struct {
+    payload: Payload,
+    ty: Type,
+    const Payload = extern union {
+        message: *MessageDescriptor,
+        enum_: *EnumDescriptor,
+        file: *FileDescriptor,
+    };
+    const Type = enum(u8) { message, enum_, file };
+    pub fn init(comptime ty: Type, payload: anytype) Descriptor {
+        const pl = switch (ty) {
+            .file => .{ .file = payload },
+            .message => .{ .message = payload },
+            .enum_ => .{ .enum_ = payload },
+        };
+        return .{ .ty = ty, .payload = pl };
+    }
+    pub fn name(self: Descriptor) []const u8 {
+        return switch (self.ty) {
+            .message => |x| x.name,
+            .enum_ => |x| x.name,
+            .file => |x| x.name,
+        };
+    }
+};
+
+pub const DescriptorMap = std.StringHashMapUnmanaged(*Descriptor);
+
+pub const Message = extern struct {
+    base: Descriptor,
+};

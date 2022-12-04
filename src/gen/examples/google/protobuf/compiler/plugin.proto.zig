@@ -11,14 +11,14 @@ pub const Version = struct {
   suffix: []const u8 = "",// 4
 __fields_present: std.StaticBitSet(4)  = std.StaticBitSet(4).initEmpty(),
 pub const __field_nums = [_]usize{ 1, 2, 3, 4 };
-pub const Version_field_ranges = decoding.fieldRanges(Version, exclude_fields);
-pub const Version_field_ranges_lut = decoding.rangeLookupTable(Version, exclude_fields);
-const Version_field_names_map = VersionFieldNameMap.init(.{
+pub const __field_ranges = decoding.fieldRanges(Version, exclude_fields);
+pub const __field_ranges_lut = decoding.rangeLookupTable(Version, exclude_fields);
+pub const __field_names_map = Version.FieldNameMap.init(.{
 .major = "major", .minor = "minor", .patch = "patch", .suffix = "suffix", });
-pub const VersionFieldEnum = decoding.FieldEnum(Version, exclude_fields);
-pub const VersionFieldNameMap = std.enums.EnumMap(VersionFieldEnum, []const u8);
-pub fn set(self: *Version, comptime field: VersionFieldEnum, value: anytype) void {
-    const field_name = comptime Version_field_names_map.get(field) orelse unreachable;
+pub const FieldEnum = decoding.FieldEnum(Version, exclude_fields);
+pub const FieldNameMap = std.enums.EnumMap(Version.FieldEnum, []const u8);
+pub fn set(self: *Version, comptime field: Version.FieldEnum, value: anytype) void {
+    const field_name = comptime Version.__field_names_map.get(field) orelse unreachable;
     const names = comptime blk: {
         var result: []const []const u8 = &.{};
         var iter = std.mem.split(u8, field_name, ".");
@@ -36,19 +36,19 @@ pub fn set(self: *Version, comptime field: VersionFieldEnum, value: anytype) voi
     }
     self.setPresent(field);
 }
-pub fn setPresent(self: *Version, comptime field: VersionFieldEnum) void {
+pub fn setPresent(self: *Version, comptime field: Version.FieldEnum) void {
     self.clear(field);
     const idx = comptime @enumToInt(field);
     self.__fields_present.set(idx);
 }
-pub fn has(self: Version, comptime field: VersionFieldEnum) bool {
+pub fn has(self: Version, comptime field: Version.FieldEnum) bool {
     const idx = comptime @enumToInt(field);
     return self.__fields_present.isSet(idx);
 }
-pub fn clear(self: *Version, comptime field: VersionFieldEnum) void {
+pub fn clear(self: *Version, comptime field: Version.FieldEnum) void {
     const idx = comptime @enumToInt(field);
-    const range_idx = Version_field_ranges_lut[idx];
-    const range = Version_field_ranges[range_idx];
+    const range_idx = Version.__field_ranges_lut[idx];
+    const range = Version.__field_ranges[range_idx];
     self.__fields_present.setRangeValue(range, false);
 }
 pub fn deserialize(self: *Version, allocator: Allocator, reader: anytype) Error!void {
@@ -127,14 +127,14 @@ pub const CodeGeneratorRequest = struct {
   compiler_version: ?*Version = null,// 3
 __fields_present: std.StaticBitSet(4)  = std.StaticBitSet(4).initEmpty(),
 pub const __field_nums = [_]usize{ 1, 2, 3, 15 };
-pub const CodeGeneratorRequest_field_ranges = decoding.fieldRanges(CodeGeneratorRequest, exclude_fields);
-pub const CodeGeneratorRequest_field_ranges_lut = decoding.rangeLookupTable(CodeGeneratorRequest, exclude_fields);
-const CodeGeneratorRequest_field_names_map = CodeGeneratorRequestFieldNameMap.init(.{
+pub const __field_ranges = decoding.fieldRanges(CodeGeneratorRequest, exclude_fields);
+pub const __field_ranges_lut = decoding.rangeLookupTable(CodeGeneratorRequest, exclude_fields);
+pub const __field_names_map = CodeGeneratorRequest.FieldNameMap.init(.{
 .file_to_generate = "file_to_generate", .parameter = "parameter", .compiler_version = "compiler_version", .proto_file = "proto_file", });
-pub const CodeGeneratorRequestFieldEnum = decoding.FieldEnum(CodeGeneratorRequest, exclude_fields);
-pub const CodeGeneratorRequestFieldNameMap = std.enums.EnumMap(CodeGeneratorRequestFieldEnum, []const u8);
-pub fn set(self: *CodeGeneratorRequest, comptime field: CodeGeneratorRequestFieldEnum, value: anytype) void {
-    const field_name = comptime CodeGeneratorRequest_field_names_map.get(field) orelse unreachable;
+pub const FieldEnum = decoding.FieldEnum(CodeGeneratorRequest, exclude_fields);
+pub const FieldNameMap = std.enums.EnumMap(CodeGeneratorRequest.FieldEnum, []const u8);
+pub fn set(self: *CodeGeneratorRequest, comptime field: CodeGeneratorRequest.FieldEnum, value: anytype) void {
+    const field_name = comptime CodeGeneratorRequest.__field_names_map.get(field) orelse unreachable;
     const names = comptime blk: {
         var result: []const []const u8 = &.{};
         var iter = std.mem.split(u8, field_name, ".");
@@ -152,19 +152,19 @@ pub fn set(self: *CodeGeneratorRequest, comptime field: CodeGeneratorRequestFiel
     }
     self.setPresent(field);
 }
-pub fn setPresent(self: *CodeGeneratorRequest, comptime field: CodeGeneratorRequestFieldEnum) void {
+pub fn setPresent(self: *CodeGeneratorRequest, comptime field: CodeGeneratorRequest.FieldEnum) void {
     self.clear(field);
     const idx = comptime @enumToInt(field);
     self.__fields_present.set(idx);
 }
-pub fn has(self: CodeGeneratorRequest, comptime field: CodeGeneratorRequestFieldEnum) bool {
+pub fn has(self: CodeGeneratorRequest, comptime field: CodeGeneratorRequest.FieldEnum) bool {
     const idx = comptime @enumToInt(field);
     return self.__fields_present.isSet(idx);
 }
-pub fn clear(self: *CodeGeneratorRequest, comptime field: CodeGeneratorRequestFieldEnum) void {
+pub fn clear(self: *CodeGeneratorRequest, comptime field: CodeGeneratorRequest.FieldEnum) void {
     const idx = comptime @enumToInt(field);
-    const range_idx = CodeGeneratorRequest_field_ranges_lut[idx];
-    const range = CodeGeneratorRequest_field_ranges[range_idx];
+    const range_idx = CodeGeneratorRequest.__field_ranges_lut[idx];
+    const range = CodeGeneratorRequest.__field_ranges[range_idx];
     self.__fields_present.setRangeValue(range, false);
 }
 pub fn deserialize(self: *CodeGeneratorRequest, allocator: Allocator, reader: anytype) Error!void {
@@ -250,9 +250,12 @@ self.setPresent(.proto_file);
 
 pub fn serialize(self: CodeGeneratorRequest, writer: anytype) Error!void {
 if(self.has(.file_to_generate)) {
-for (self.file_to_generate.items) |it| {
+{
+var iter = decoding.constListIterator(self.file_to_generate);
+while (iter.next()) |it| {
   try decoding.writeFieldKey(1, .length_delimited, writer);
   try decoding.writeString(it, writer);
+}
 }}
 if(self.has(.parameter)) {
 try decoding.writeFieldKey(2, .length_delimited, writer);
@@ -268,7 +271,9 @@ try decoding.writeVarint128(usize, countingwriter.bytes_written, writer, .int);
 try self.compiler_version.?.serialize(writer);
 }
 if(self.has(.proto_file)) {
-for (self.proto_file.items) |it| {
+{
+var iter = decoding.constListIterator(self.proto_file);
+while (iter.next()) |it| {
   try decoding.writeFieldKey(15, .length_delimited, writer);
   var countingwriter = std.io.countingWriter(std.io.null_writer);
 const cwriter = countingwriter.writer();
@@ -276,6 +281,7 @@ const cwriter = countingwriter.writer();
   try it.serialize(cwriter);
   try decoding.writeVarint128(usize, countingwriter.bytes_written, writer, .int);
   try it.serialize(writer);
+}
 }
 }
 }
@@ -296,14 +302,14 @@ __fields_present: std.StaticBitSet(3)  = std.StaticBitSet(3).initEmpty(),
     generated_code_info: ?*google_protobuf_descriptor.GeneratedCodeInfo = null,// 16
 __fields_present: std.StaticBitSet(4)  = std.StaticBitSet(4).initEmpty(),
 pub const __field_nums = [_]usize{ 1, 2, 15, 16 };
-pub const File_field_ranges = decoding.fieldRanges(File, exclude_fields);
-pub const File_field_ranges_lut = decoding.rangeLookupTable(File, exclude_fields);
-const File_field_names_map = FileFieldNameMap.init(.{
+pub const __field_ranges = decoding.fieldRanges(File, exclude_fields);
+pub const __field_ranges_lut = decoding.rangeLookupTable(File, exclude_fields);
+pub const __field_names_map = File.FieldNameMap.init(.{
 .name = "name", .insertion_point = "insertion_point", .content = "content", .generated_code_info = "generated_code_info", });
-pub const FileFieldEnum = decoding.FieldEnum(File, exclude_fields);
-pub const FileFieldNameMap = std.enums.EnumMap(FileFieldEnum, []const u8);
-pub fn set(self: *File, comptime field: FileFieldEnum, value: anytype) void {
-    const field_name = comptime File_field_names_map.get(field) orelse unreachable;
+pub const FieldEnum = decoding.FieldEnum(File, exclude_fields);
+pub const FieldNameMap = std.enums.EnumMap(File.FieldEnum, []const u8);
+pub fn set(self: *File, comptime field: File.FieldEnum, value: anytype) void {
+    const field_name = comptime File.__field_names_map.get(field) orelse unreachable;
     const names = comptime blk: {
         var result: []const []const u8 = &.{};
         var iter = std.mem.split(u8, field_name, ".");
@@ -321,19 +327,19 @@ pub fn set(self: *File, comptime field: FileFieldEnum, value: anytype) void {
     }
     self.setPresent(field);
 }
-pub fn setPresent(self: *File, comptime field: FileFieldEnum) void {
+pub fn setPresent(self: *File, comptime field: File.FieldEnum) void {
     self.clear(field);
     const idx = comptime @enumToInt(field);
     self.__fields_present.set(idx);
 }
-pub fn has(self: File, comptime field: FileFieldEnum) bool {
+pub fn has(self: File, comptime field: File.FieldEnum) bool {
     const idx = comptime @enumToInt(field);
     return self.__fields_present.isSet(idx);
 }
-pub fn clear(self: *File, comptime field: FileFieldEnum) void {
+pub fn clear(self: *File, comptime field: File.FieldEnum) void {
     const idx = comptime @enumToInt(field);
-    const range_idx = File_field_ranges_lut[idx];
-    const range = File_field_ranges[range_idx];
+    const range_idx = File.__field_ranges_lut[idx];
+    const range = File.__field_ranges[range_idx];
     self.__fields_present.setRangeValue(range, false);
 }
 pub fn deserialize(self: *File, allocator: Allocator, reader: anytype) Error!void {
@@ -432,14 +438,14 @@ try self.generated_code_info.?.serialize(writer);
 }
   };
 pub const __field_nums = [_]usize{ 1, 2, 15 };
-pub const CodeGeneratorResponse_field_ranges = decoding.fieldRanges(CodeGeneratorResponse, exclude_fields);
-pub const CodeGeneratorResponse_field_ranges_lut = decoding.rangeLookupTable(CodeGeneratorResponse, exclude_fields);
-const CodeGeneratorResponse_field_names_map = CodeGeneratorResponseFieldNameMap.init(.{
+pub const __field_ranges = decoding.fieldRanges(CodeGeneratorResponse, exclude_fields);
+pub const __field_ranges_lut = decoding.rangeLookupTable(CodeGeneratorResponse, exclude_fields);
+pub const __field_names_map = CodeGeneratorResponse.FieldNameMap.init(.{
 .error_ = "error_", .supported_features = "supported_features", .file = "file", });
-pub const CodeGeneratorResponseFieldEnum = decoding.FieldEnum(CodeGeneratorResponse, exclude_fields);
-pub const CodeGeneratorResponseFieldNameMap = std.enums.EnumMap(CodeGeneratorResponseFieldEnum, []const u8);
-pub fn set(self: *CodeGeneratorResponse, comptime field: CodeGeneratorResponseFieldEnum, value: anytype) void {
-    const field_name = comptime CodeGeneratorResponse_field_names_map.get(field) orelse unreachable;
+pub const FieldEnum = decoding.FieldEnum(CodeGeneratorResponse, exclude_fields);
+pub const FieldNameMap = std.enums.EnumMap(CodeGeneratorResponse.FieldEnum, []const u8);
+pub fn set(self: *CodeGeneratorResponse, comptime field: CodeGeneratorResponse.FieldEnum, value: anytype) void {
+    const field_name = comptime CodeGeneratorResponse.__field_names_map.get(field) orelse unreachable;
     const names = comptime blk: {
         var result: []const []const u8 = &.{};
         var iter = std.mem.split(u8, field_name, ".");
@@ -457,19 +463,19 @@ pub fn set(self: *CodeGeneratorResponse, comptime field: CodeGeneratorResponseFi
     }
     self.setPresent(field);
 }
-pub fn setPresent(self: *CodeGeneratorResponse, comptime field: CodeGeneratorResponseFieldEnum) void {
+pub fn setPresent(self: *CodeGeneratorResponse, comptime field: CodeGeneratorResponse.FieldEnum) void {
     self.clear(field);
     const idx = comptime @enumToInt(field);
     self.__fields_present.set(idx);
 }
-pub fn has(self: CodeGeneratorResponse, comptime field: CodeGeneratorResponseFieldEnum) bool {
+pub fn has(self: CodeGeneratorResponse, comptime field: CodeGeneratorResponse.FieldEnum) bool {
     const idx = comptime @enumToInt(field);
     return self.__fields_present.isSet(idx);
 }
-pub fn clear(self: *CodeGeneratorResponse, comptime field: CodeGeneratorResponseFieldEnum) void {
+pub fn clear(self: *CodeGeneratorResponse, comptime field: CodeGeneratorResponse.FieldEnum) void {
     const idx = comptime @enumToInt(field);
-    const range_idx = CodeGeneratorResponse_field_ranges_lut[idx];
-    const range = CodeGeneratorResponse_field_ranges[range_idx];
+    const range_idx = CodeGeneratorResponse.__field_ranges_lut[idx];
+    const range = CodeGeneratorResponse.__field_ranges[range_idx];
     self.__fields_present.setRangeValue(range, false);
 }
 pub fn deserialize(self: *CodeGeneratorResponse, allocator: Allocator, reader: anytype) Error!void {
@@ -541,7 +547,9 @@ try decoding.writeFieldKey(2, .varint, writer);
 try decoding.writeVarint128(u64, self.supported_features, writer, .int);
 }
 if(self.has(.file)) {
-for (self.file.items) |it| {
+{
+var iter = decoding.constListIterator(self.file);
+while (iter.next()) |it| {
   try decoding.writeFieldKey(15, .length_delimited, writer);
   var countingwriter = std.io.countingWriter(std.io.null_writer);
 const cwriter = countingwriter.writer();
@@ -549,6 +557,7 @@ const cwriter = countingwriter.writer();
   try it.serialize(cwriter);
   try decoding.writeVarint128(usize, countingwriter.bytes_written, writer, .int);
   try it.serialize(writer);
+}
 }
 }
 }
