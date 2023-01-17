@@ -1,0 +1,1 @@
+archived in favor of https://github.com/travisstaloch/protobuf-zig
